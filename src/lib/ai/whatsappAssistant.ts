@@ -1,0 +1,255 @@
+import { GoogleGenAI } from '@google/genai'
+import { createClient } from '@supabase/supabase-js'
+
+export async function processWhatsAppSessionWithAI(sessionId: string) {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
+  const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!
+  const supabase = createClient(supabaseUrl, supabaseServiceKey)
+
+  // 1. Fetch Session
+  const { data: session } = await supabase
+    .from('whatsapp_sessions')
+    .select('*')
+    .eq('id', sessionId)
+    .single()
+
+  if (!session) throw new Error('Session not found')
+
+  // 2. Fetch Messages (chronological)
+  const { data: messages } = await supabase
+    .from('whatsapp_messages')
+    .select('*')
+    .eq('session_id', sessionId)
+    .order('created_at', { ascending: true })
+
+  if (!messages || messages.length === 0) return
+
+  const latestMessage = messages[messages.length - 1]
+
+  // 3. Fetch Customer info (if known)
+  const { data: customer } = await supabase
+    .from('customers')
+    .select('*')
+    .eq('phone', session.customer_phone)
+    .single()
+
+  // 4. Fetch Dialect Landmarks
+  const { data: landmarks } = await supabase.from('dialect_landmarks').select('*')
+
+  // 5. Fetch Available Drivers Count/ETA
+  const { data: availableDrivers } = await supabase
+    .from('drivers')
+    .select('id, current_lat, current_lng, vehicle_id')
+    .eq('availability', 'available')
+
+  // 6. Init Gemini
+  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY })
+
+  // 7. System Prompt Specialized for Lebanon/Syria
+  const systemPrompt = `You are an expert AI Taxi Dispatch Operator in Lebanon. 
+You understand Lebanese Arabic, Syrian Arabic, Arabizi (Franco-Arabic), French, and English perfectly.
+You must extract the exact ride details and missing information from the conversation history.
+
+Context provided:
+- Customer Name: ${customer?.full_name || 'Unknown'}
+- Known Landmarks: ${JSON.stringify(landmarks?.map(l => l.name_ar))}
+- Available Cars Nearby: ${availableDrivers?.length || 0}
+
+Instructions:
+1. Analyze the customer's intent.
+2. Extract the Pickup and Destination locations. 
+3. **CRITICAL FOR PICKUP:** If the user has NOT provided a WhatsApp Location Pin (JSON lat/lng), and their pickup text is a broad area/city (like "Zouk Mosbeh" or "Antelias"), you MUST add "pickup_gps" to "missing_fields". A WhatsApp pin is highly preferred unless it's a very famous exact landmark (like "ABC Mall").
+4. **CRITICAL FOR PINS:** If the conversation history shows a message with a JSON object like {"lat": 33.89, "lng": 35.50}, this is a WhatsApp Location Pin. Extract these numbers into "extracted_pickup_lat" and "extracted_pickup_lng".
+5. **NEGOTIATION:** If you have the pickup and destination, you must give the customer an estimated cost (invent a realistic USD price for Lebanon between $5 and $25) and ask them if they confirm the ride. 
+6. **CONFIRMATION:** Set "is_ride_confirmed" to true ONLY if the customer explicitly says "Yes / OK / Confirm / Send it" AFTER you have given them the price estimate and locations. If they are still negotiating, or you just asked them for confirmation, keep it false!
+7. "suggested_operator_reply" MUST be a polite response asking for missing info, OR giving the price quote and asking for confirmation, OR saying "Your car is on the way!". YOU MUST REPLY IN THE EXACT SAME LANGUAGE THE CUSTOMER USED (e.g. if they speak English, reply in English).
+If they are missing locations, ALWAYS include this exact booking form link in your reply so they can fill it out themselves: http://localhost:3000/customer-booking/${session.id}
+8. YOU MUST OUTPUT STRICT JSON MATCHING THIS EXACT SCHEMA:
+{
+  "voice_transcription_ar": "string or null",
+  "voice_translation_en": "string or null",
+  "detected_intent": "string",
+  "extracted_customer_name": "string or null",
+  "extracted_pickup": "string or null",
+  "extracted_pickup_lat": 33.89,
+  "extracted_pickup_lng": 35.50,
+  "extracted_destination": "string or null",
+  "extracted_time": "string",
+  "extracted_passengers": 1,
+  "extracted_notes": "string",
+  "missing_fields": ["pickup", "destination", "pickup_gps"],
+  "is_ride_confirmed": false,
+  "ai_confidence_score": 0.95,
+  "suggested_operator_reply": "string"
+}
+`
+
+  // 8. Prepare Messages History
+  let userContent = "Conversation History:\n"
+  for (const msg of messages) {
+    if (msg.message_type === 'audio') {
+      // In a real scenario, we would download the WhatsApp OGG file and pass the bytes directly to Gemini 2.5 Flash
+      // For this step, we will pass a placeholder indicating audio was received if we don't have bytes
+      userContent += `[Audio Message ID: ${msg.raw_text}]\n(Simulate transcription based on typical booking audio if no bytes available)\n`
+    } else {
+      userContent += `${msg.direction === 'inbound' ? 'Customer' : 'Bot'}: ${msg.raw_text}\n`
+    }
+  }
+
+  let aiText = ''
+  let retries = 3
+  while (retries > 0) {
+    try {
+      const response = await ai.models.generateContent({
+        model: 'gemini-3.8-flash',
+        contents: [{ role: 'user', parts: [{ text: userContent }] }],
+        config: {
+          systemInstruction: systemPrompt,
+          responseMimeType: 'application/json',
+          temperature: 0.2
+        }
+      })
+      aiText = response.text || ''
+      break; // Success, break out of retry loop
+    } catch (err: any) {
+      if (err.status === 429 || err.message?.includes('exceeded your current quota')) {
+        console.warn('Quota exceeded for gemini-3.8-flash. Falling back to gemini-3.8-pro...')
+        try {
+          response = await ai.models.generateContent({
+            model: 'gemini-3.8-pro',
+            contents: [{ role: 'user', parts: [{ text: userContent }] }],
+            config: {
+              systemInstruction: systemPrompt,
+              responseMimeType: 'application/json',
+              temperature: 0.2
+            }
+          })
+          aiText = response.text || ''
+          break;
+        } catch (proErr: any) {
+          console.error('Both Flash and Pro models failed:', proErr)
+          await supabase.from('whatsapp_sessions').update({
+            session_status: 'human_escalated',
+            extracted_notes: 'AI Quota Exceeded (Both Flash and Pro failed).'
+          }).eq('id', session.id)
+
+          await supabase.from('whatsapp_messages').insert([{
+            session_id: session.id,
+            direction: 'outbound',
+            message_type: 'text',
+            raw_text: `Our AI is currently overloaded. Please book your ride directly using this link:\nhttp://localhost:3000/customer-booking/${session.id}`
+          }])
+          return
+        }
+      }
+
+      if (err.status === 503 || err.message?.includes('UNAVAILABLE')) {
+        console.warn(`gemini-3.8-flash overloaded. Retries left: ${retries - 1}`)
+        retries--
+        if (retries === 0) {
+          console.error('AI API Error Exhausted Retries:', err)
+          await supabase.from('whatsapp_sessions').update({
+            session_status: 'human_escalated',
+            extracted_notes: 'AI Failed: ' + err.message
+          }).eq('id', session.id)
+
+          await supabase.from('whatsapp_messages').insert([{
+            session_id: session.id,
+            direction: 'outbound',
+            message_type: 'text',
+            raw_text: `We are experiencing high volume. Please secure your ride directly here:\nhttp://localhost:3000/customer-booking/${session.id}`
+          }])
+          return
+        }
+        await new Promise(resolve => setTimeout(resolve, 3000)) // Wait 3s
+      } else {
+        console.error('AI API Error:', err)
+        await supabase.from('whatsapp_sessions').update({
+          session_status: 'human_escalated',
+          extracted_notes: 'AI Failed: ' + err.message
+        }).eq('id', session.id)
+
+        await supabase.from('whatsapp_messages').insert([{
+          session_id: session.id,
+          direction: 'outbound',
+          message_type: 'text',
+          raw_text: `To get a driver instantly, please fill out your locations here:\nhttp://localhost:3000/customer-booking/${session.id}`
+        }])
+        return
+      }
+    }
+  }
+
+  let parsed: any
+  try {
+    parsed = JSON.parse(aiText)
+  } catch (e) {
+    console.error('Failed to parse AI JSON', aiText)
+    await supabase.from('whatsapp_sessions').update({ session_status: 'human_escalated' }).eq('id', session.id)
+    return
+  }
+
+  // 10. Update the WhatsApp Session state
+  let newStatus = session.session_status
+
+  // Merge new AI extractions with existing session data
+  const mergedPickup = parsed.extracted_pickup || session.extracted_pickup
+  const mergedDestination = parsed.extracted_destination || session.extracted_destination
+  const missing = []
+  if (!mergedPickup) missing.push('pickup')
+  if (!mergedDestination) missing.push('destination')
+
+  if (missing.length === 0 && parsed.is_ride_confirmed) {
+    newStatus = 'ready_for_operator_review'
+  } else {
+    newStatus = 'awaiting_info'
+  }
+
+  await supabase.from('whatsapp_sessions').update({
+    session_status: newStatus,
+    detected_intent: parsed.detected_intent,
+    extracted_customer_name: parsed.extracted_customer_name || session.extracted_customer_name,
+    extracted_pickup: mergedPickup,
+    extracted_pickup_lat: parsed.extracted_pickup_lat || session.extracted_pickup_lat,
+    extracted_pickup_lng: parsed.extracted_pickup_lng || session.extracted_pickup_lng,
+    extracted_destination: mergedDestination,
+    extracted_time: parsed.extracted_time,
+    extracted_passengers: parsed.extracted_passengers || 1,
+    extracted_notes: parsed.extracted_notes,
+    missing_fields: missing,
+    ai_confidence_score: parsed.ai_confidence_score,
+    suggested_operator_reply: parsed.suggested_operator_reply
+  }).eq('id', session.id)
+
+  // 11. Auto-Draft Order if fully ready
+  if (newStatus === 'ready_for_operator_review' && !session.linked_order_id) {
+    // Generate a draft order in the DB
+    const { data: order } = await supabase.from('orders').insert([{
+      customer_id: customer?.id || null,
+      customer_phone: session.customer_phone,
+      customer_name: parsed.extracted_customer_name || customer?.full_name || 'WhatsApp Customer',
+      pickup_address: mergedPickup,
+      pickup_lat: parsed.extracted_pickup_lat || session.extracted_pickup_lat || null,
+      pickup_lng: parsed.extracted_pickup_lng || session.extracted_pickup_lng || null,
+      destination_address: mergedDestination,
+      status: 'ai_draft',
+      notes: parsed.extracted_notes
+      // Ideally we would also call routingService here to geocode the addresses
+      // and calculate the fare immediately for the operator to review.
+    }]).select().single()
+
+    if (order) {
+      await supabase.from('whatsapp_sessions').update({ linked_order_id: order.id }).eq('id', session.id)
+    }
+  }
+
+  // 12. Automatically send the reply back to the customer if the AI generated one
+  if (parsed.suggested_operator_reply) {
+    await supabase.from('whatsapp_messages').insert([{
+      session_id: session.id,
+      direction: 'outbound',
+      message_type: 'text',
+      raw_text: parsed.suggested_operator_reply
+    }])
+  }
+}
