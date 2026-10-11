@@ -13,14 +13,14 @@ const supabase = createClient(supabaseUrl, supabaseServiceKey);
 async function runTest() {
   console.log('🚀 Starting WhatsApp AI Test...');
 
-  const phone = '+961' + Math.floor(Math.random() * 100000000);
+  const phone = '+96170407966';
   
   console.log(`📱 Creating session for phone: ${phone}`);
   const { data: session, error: sessionError } = await supabase
     .from('whatsapp_sessions')
     .insert([{ 
       customer_phone: phone,
-      whatsapp_business_number: '+1234567890',
+      whatsapp_business_number: 'line_1',
       session_status: 'active',
     }])
     .select()
@@ -34,11 +34,9 @@ async function runTest() {
   const sessionId = session.id;
   console.log(`✅ Session created: ${sessionId}`);
 
-  // We are simulating a conversation here
+  // Customer message to the Taxi Bot
   const messages = [
-    { session_id: sessionId, direction: 'inbound', message_type: 'text', raw_text: 'Hi, I need a taxi' },
-    { session_id: sessionId, direction: 'outbound', message_type: 'text', raw_text: 'Hello! Where are you located and where do you want to go?' },
-    { session_id: sessionId, direction: 'inbound', message_type: 'text', raw_text: 'I am in Zouk Mosbeh and want to go to ABC Dbayeh' },
+    { session_id: sessionId, direction: 'inbound', message_type: 'text', raw_text: 'Hi, I need a taxi from Beirut to Jounieh for 2 passengers' },
   ];
 
   console.log('💬 Inserting messages...');

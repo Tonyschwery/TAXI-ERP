@@ -43,8 +43,9 @@ export async function processWhatsAppSessionWithAI(sessionId: string) {
     .select('id, current_lat, current_lng, vehicle_id')
     .eq('availability', 'available')
 
-  // 6. Init Gemini
+  // 6. Init Gemini & App URL
   const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY })
+  const appUrl = (process.env.NEXT_PUBLIC_APP_URL || 'https://taxi-erp.vercel.app').replace(/\/$/, '')
 
   // 7. System Prompt Specialized for Lebanon/Syria
   const systemPrompt = `You are an expert AI Taxi Dispatch Operator in Lebanon. 
@@ -64,7 +65,7 @@ Instructions:
 5. **NEGOTIATION:** If you have the pickup and destination, you must give the customer an estimated cost (invent a realistic USD price for Lebanon between $5 and $25) and ask them if they confirm the ride. 
 6. **CONFIRMATION:** Set "is_ride_confirmed" to true ONLY if the customer explicitly says "Yes / OK / Confirm / Send it" AFTER you have given them the price estimate and locations. If they are still negotiating, or you just asked them for confirmation, keep it false!
 7. "suggested_operator_reply" MUST be a polite response asking for missing info, OR giving the price quote and asking for confirmation, OR saying "Your car is on the way!". YOU MUST REPLY IN THE EXACT SAME LANGUAGE THE CUSTOMER USED (e.g. if they speak English, reply in English).
-If they are missing locations, ALWAYS include this exact booking form link in your reply so they can fill it out themselves: http://localhost:3000/customer-booking/${session.id}
+If they are missing locations, ALWAYS include this exact booking form link in your reply so they can fill it out themselves: ${appUrl}/customer-booking/${session.id}
 8. YOU MUST OUTPUT STRICT JSON MATCHING THIS EXACT SCHEMA:
 {
   "voice_transcription_ar": "string or null",
