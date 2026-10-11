@@ -152,13 +152,14 @@ export default function CustomerBookingPage({ params }: { params: Promise<{ id: 
                   required
                   value={pickup || ''}
                   onChange={e => handlePickupChange(e.target.value)}
+                  onFocus={() => { if (pickup && pickup.length > 2) handlePickupChange(pickup) }}
                   placeholder="e.g. ABC Mall Achrafieh, Gate 2"
                   className="w-full pl-10 pr-4 py-4 bg-gray-50 border-2 border-gray-100 rounded-2xl focus:outline-none focus:border-orange-500 focus:ring-4 focus:ring-orange-500/10 transition-all font-medium text-gray-900"
                 />
                 {pickupResults.length > 0 && (
                   <ul className="absolute z-10 w-full bg-white border border-gray-200 mt-1 rounded-xl shadow-lg max-h-48 overflow-y-auto">
                     {pickupResults.map((p, i) => (
-                      <li key={p.place_id || i} onClick={() => selectPickup(p)} className="p-3 hover:bg-orange-50 cursor-pointer border-b border-gray-100 text-sm font-medium text-gray-800">
+                      <li key={p.place_id || i} onMouseDown={() => selectPickup(p)} className="p-3 hover:bg-orange-50 cursor-pointer border-b border-gray-100 text-sm font-medium text-gray-800">
                         {p.name || p.description}
                       </li>
                     ))}
@@ -178,13 +179,14 @@ export default function CustomerBookingPage({ params }: { params: Promise<{ id: 
                   required
                   value={destination || ''}
                   onChange={e => handleDestChange(e.target.value)}
+                  onFocus={() => { if (destination && destination.length > 2) handleDestChange(destination) }}
                   placeholder="e.g. Hamra Street, next to Starbucks"
                   className="w-full pl-10 pr-4 py-4 bg-gray-50 border-2 border-gray-100 rounded-2xl focus:outline-none focus:border-orange-500 focus:ring-4 focus:ring-orange-500/10 transition-all font-medium text-gray-900"
                 />
                 {destResults.length > 0 && (
                   <ul className="absolute z-10 w-full bg-white border border-gray-200 mt-1 rounded-xl shadow-lg max-h-48 overflow-y-auto">
                     {destResults.map((p, i) => (
-                      <li key={p.place_id || i} onClick={() => selectDest(p)} className="p-3 hover:bg-red-50 cursor-pointer border-b border-gray-100 text-sm font-medium text-gray-800">
+                      <li key={p.place_id || i} onMouseDown={() => selectDest(p)} className="p-3 hover:bg-red-50 cursor-pointer border-b border-gray-100 text-sm font-medium text-gray-800">
                         {p.name || p.description}
                       </li>
                     ))}

@@ -115,7 +115,7 @@ If they are missing locations, ALWAYS include this exact booking form link in yo
       if (err.status === 429 || err.message?.includes('exceeded your current quota')) {
         console.warn('Quota exceeded for gemini-3.8-flash. Falling back to gemini-3.8-pro...')
         try {
-          response = await ai.models.generateContent({
+          const proResponse = await ai.models.generateContent({
             model: 'gemini-3.8-pro',
             contents: [{ role: 'user', parts: [{ text: userContent }] }],
             config: {
@@ -124,9 +124,10 @@ If they are missing locations, ALWAYS include this exact booking form link in yo
               temperature: 0.2
             }
           })
-          aiText = response.text || ''
+          aiText = proResponse.text || ''
           break;
         } catch (proErr: any) {
+          const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
           console.error('Both Flash and Pro models failed:', proErr)
           await supabase.from('whatsapp_sessions').update({
             session_status: 'human_escalated',
@@ -137,7 +138,7 @@ If they are missing locations, ALWAYS include this exact booking form link in yo
             session_id: session.id,
             direction: 'outbound',
             message_type: 'text',
-            raw_text: `Our AI is currently overloaded. Please book your ride directly using this link:\nhttp://localhost:3000/customer-booking/${session.id}`
+            raw_text: `Our AI is currently overloaded. Please book your ride directly using this link:\n${appUrl}/customer-booking/${session.id}`
           }])
           return
         }
@@ -147,6 +148,7 @@ If they are missing locations, ALWAYS include this exact booking form link in yo
         console.warn(`gemini-3.8-flash overloaded. Retries left: ${retries - 1}`)
         retries--
         if (retries === 0) {
+          const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
           console.error('AI API Error Exhausted Retries:', err)
           await supabase.from('whatsapp_sessions').update({
             session_status: 'human_escalated',
@@ -157,12 +159,13 @@ If they are missing locations, ALWAYS include this exact booking form link in yo
             session_id: session.id,
             direction: 'outbound',
             message_type: 'text',
-            raw_text: `We are experiencing high volume. Please secure your ride directly here:\nhttp://localhost:3000/customer-booking/${session.id}`
+            raw_text: `We are experiencing high volume. Please secure your ride directly here:\n${appUrl}/customer-booking/${session.id}`
           }])
           return
         }
         await new Promise(resolve => setTimeout(resolve, 3000)) // Wait 3s
       } else {
+        const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
         console.error('AI API Error:', err)
         await supabase.from('whatsapp_sessions').update({
           session_status: 'human_escalated',
@@ -173,7 +176,7 @@ If they are missing locations, ALWAYS include this exact booking form link in yo
           session_id: session.id,
           direction: 'outbound',
           message_type: 'text',
-          raw_text: `To get a driver instantly, please fill out your locations here:\nhttp://localhost:3000/customer-booking/${session.id}`
+          raw_text: `To get a driver instantly, please fill out your locations here:\n${appUrl}/customer-booking/${session.id}`
         }])
         return
       }
@@ -195,11 +198,13 @@ If they are missing locations, ALWAYS include this exact booking form link in yo
   // Merge new AI extractions with existing session data
   const mergedPickup = parsed.extracted_pickup || session.extracted_pickup
   const mergedDestination = parsed.extracted_destination || session.extracted_destination
-  const missing = []
-  if (!mergedPickup) missing.push('pickup')
-  if (!mergedDestination) missing.push('destination')
+  const missing = new Set(parsed.missing_fields || [])
+  if (!mergedPickup) missing.add('pickup')
+  if (!mergedDestination) missing.add('destination')
 
-  if (missing.length === 0 && parsed.is_ride_confirmed) {
+  const missingArray = Array.from(missing)
+
+  if (missingArray.length === 0 && parsed.is_ride_confirmed) {
     newStatus = 'ready_for_operator_review'
   } else {
     newStatus = 'awaiting_info'
@@ -216,7 +221,7 @@ If they are missing locations, ALWAYS include this exact booking form link in yo
     extracted_time: parsed.extracted_time,
     extracted_passengers: parsed.extracted_passengers || 1,
     extracted_notes: parsed.extracted_notes,
-    missing_fields: missing,
+    missing_fields: missingArray,
     ai_confidence_score: parsed.ai_confidence_score,
     suggested_operator_reply: parsed.suggested_operator_reply
   }).eq('id', session.id)

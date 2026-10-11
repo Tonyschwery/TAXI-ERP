@@ -1,24 +1,40 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { saveDriver, regenerateDriverToken } from './actions'
+import { createClient } from '@/lib/supabase/client'
 
 type Driver = any
 type Category = any
 type Vehicle = any
 
-export default function DriverManager({ 
-  initialDrivers, 
-  categories, 
+export default function DriverManager({
+  initialDrivers,
+  categories,
   vehicles,
   appUrl
-}: { 
+}: {
   initialDrivers: Driver[];
   categories: Category[];
   vehicles: Vehicle[];
   appUrl: string;
 }) {
-  const [drivers] = useState<Driver[]>(initialDrivers)
+  const [drivers, setDrivers] = useState<Driver[]>(initialDrivers)
+  const supabase = createClient()
+
+  useEffect(() => {
+    const supabase = createClient()
+    const channel = supabase.channel('realtime:drivers_mgr')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'drivers' }, (payload) => {
+        if (payload.eventType === 'UPDATE') {
+          setDrivers(prev => prev.map(d => d.id === payload.new.id ? { ...d, ...payload.new } : d))
+        } else if (payload.eventType === 'INSERT') {
+          setDrivers(prev => [payload.new, ...prev])
+        }
+      })
+      .subscribe()
+    return () => { supabase.removeChannel(channel) }
+  }, [])
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -105,7 +121,7 @@ export default function DriverManager({
   return (
     <div>
       <div className="flex justify-end mb-4">
-        <button 
+        <button
           onClick={openNew}
           className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors"
         >
@@ -128,7 +144,7 @@ export default function DriverManager({
             </thead>
             <tbody className="divide-y divide-gray-200 dark:divide-gray-800">
               {drivers.map((d) => {
-                
+
                 // Calculate Effective Commission
                 let officePct = 50
                 let source = ''
@@ -158,9 +174,9 @@ export default function DriverManager({
                       </div>
                       <div className="text-xs text-gray-500">
                         {d.assigned_vehicle_id ? (
-                           <span className="text-purple-600 dark:text-purple-400 font-medium">Co. Car: {d.vehicles?.plate_number}</span>
+                          <span className="text-purple-600 dark:text-purple-400 font-medium">Co. Car: {d.vehicles?.plate_number}</span>
                         ) : (
-                           <span>Private: {d.private_vehicle_details}</span>
+                          <span>Private: {d.private_vehicle_details}</span>
                         )}
                         <span className="ml-2 uppercase bg-gray-200 dark:bg-gray-700 px-1 rounded">{d.vehicle_type}</span>
                       </div>
@@ -200,7 +216,7 @@ export default function DriverManager({
                       </button>
                     </td>
                     <td className="px-6 py-4 text-right">
-                      <button 
+                      <button
                         onClick={() => openEdit(d)}
                         className="text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-200 text-xs font-medium"
                       >
@@ -228,7 +244,7 @@ export default function DriverManager({
             <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-4">
               {editingId ? 'Edit Driver' : 'Add Driver'}
             </h2>
-            
+
             {error && (
               <div className="bg-red-900/50 border border-red-500 text-red-200 px-4 py-3 rounded mb-4 text-sm">
                 {error}

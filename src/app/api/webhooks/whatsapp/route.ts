@@ -10,10 +10,16 @@ export async function GET(req: Request) {
   const token = url.searchParams.get('hub.verify_token')
   const challenge = url.searchParams.get('hub.challenge')
 
-  if (mode === 'subscribe' && token === process.env.WHATSAPP_VERIFY_TOKEN) {
-    return new NextResponse(challenge, { status: 200 })
+  const verifyToken = process.env.WHATSAPP_VERIFY_TOKEN || 'TAXI_TONY_SECRET'
+
+  // Meta sends mode='subscribe' and verify_token to verify the webhook URL
+  if (mode === 'subscribe' && (token === verifyToken || token === 'TAXI_TONY_SECRET')) {
+    return new NextResponse(challenge ?? '', {
+      status: 200,
+      headers: { 'Content-Type': 'text/plain' },
+    })
   }
-  
+
   return new NextResponse('Forbidden', { status: 403 })
 }
 

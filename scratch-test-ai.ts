@@ -1,7 +1,7 @@
 import { GoogleGenAI } from '@google/genai'
-import { config } from 'dotenv'
+import { loadEnvConfig } from '@next/env'
 
-config({ path: '.env.local' })
+loadEnvConfig(process.cwd())
 
 async function test() {
   try {

@@ -21,9 +21,15 @@ export async function POST(req: Request) {
     if (!driver) return NextResponse.json({ error: 'Invalid token' }, { status: 401 })
 
     if (action === 'toggle_availability') {
+      const updateData: any = { availability: data.availability }
+      // Start the heartbeat clock the exact moment they go online
+      if (data.availability === 'available') {
+        updateData.last_gps_update = new Date().toISOString()
+      }
+
       const { error } = await supabaseAdmin
         .from('drivers')
-        .update({ availability: data.availability })
+        .update(updateData)
         .eq('id', driver.id)
       
       if (error) throw error
@@ -40,7 +46,7 @@ export async function POST(req: Request) {
     if (action === 'update_location') {
       await supabaseAdmin
         .from('drivers')
-        .update({ current_lat: data.lat, current_lng: data.lng, last_ping_at: new Date().toISOString() })
+        .update({ current_lat: data.lat, current_lng: data.lng, last_gps_update: new Date().toISOString() })
         .eq('id', driver.id)
       return NextResponse.json({ success: true })
     }

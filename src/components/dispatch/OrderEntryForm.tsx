@@ -9,7 +9,8 @@ import {
   submitOrder,
   lookupCustomer,
   searchPlaces,
-  getPlaceDetails
+  getPlaceDetails,
+  operatorCancelOrder
 } from './actions'
 import { createClient } from '@/lib/supabase/client'
 
@@ -243,9 +244,7 @@ export default function OrderEntryForm({ initialOrder = null, onSaved, onRouteUp
     setLoading(true)
     setError(null)
     try {
-      const supabase = createClient()
-      const { error } = await supabase.from('orders').update({ status: 'cancelled' }).eq('id', initialOrder.id)
-      if (error) throw error
+      await operatorCancelOrder(initialOrder.id, initialOrder.assigned_driver_id)
       
       if (onSaved) onSaved()
       else window.location.reload()

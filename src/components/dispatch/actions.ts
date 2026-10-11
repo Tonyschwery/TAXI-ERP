@@ -59,6 +59,23 @@ export async function fetchNearestDrivers(plat: number, plng: number, vehicleTyp
   return await getNearestDrivers(plat, plng, vehicleType)
 }
 
+export async function reverseGeocodeLocation(lat: number, lng: number): Promise<string> {
+  const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY;
+  if (!apiKey) return "Location Unavailable";
+  
+  try {
+    const res = await fetch(`https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&key=${apiKey}`);
+    const data = await res.json();
+    if (data.results && data.results.length > 0) {
+      // Return a short version of the address (e.g. street + city, ignoring the long country code)
+      return data.results[0].formatted_address.split(',').slice(0, 2).join(',').trim();
+    }
+  } catch (e) {
+    console.error("Reverse geocoding error:", e);
+  }
+  return "Unknown Location";
+}
+
 import { createClient as createAdminClient } from '@supabase/supabase-js'
 
 export async function submitOrder(orderData: any, actionType: 'pending' | 'assign') {
@@ -135,5 +152,27 @@ export async function submitOrder(orderData: any, actionType: 'pending' | 'assig
     await logActivity('order', orderId, 'order_created', { status: payload.status })
   }
 
+  // Update driver status to busy when assigned
+  if (actionType === 'assign' && orderData.assigned_driver_id) {
+    await adminSupabase.from('drivers').update({ availability: 'busy' }).eq('id', orderData.assigned_driver_id)
+  }
+
   return { success: true, orderId, orderNumber }
+}
+
+export async function operatorCancelOrder(orderId: string, assignedDriverId?: string | null) {
+  const adminSupabase = createAdminClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!
+  )
+  
+  const { error } = await adminSupabase.from('orders').update({ status: 'cancelled' }).eq('id', orderId)
+  if (error) throw new Error(error.message)
+  
+  if (assignedDriverId) {
+    await adminSupabase.from('drivers').update({ availability: 'available' }).eq('id', assignedDriverId)
+  }
+  
+  await logActivity('order', orderId, 'order_cancelled', { reason: 'Operator cancelled' })
+  return { success: true }
 }

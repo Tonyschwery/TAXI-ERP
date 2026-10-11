@@ -5,11 +5,44 @@ import { createClient } from '@/lib/supabase/client'
 import dynamic from 'next/dynamic'
 import OrderEntryForm from '@/components/dispatch/OrderEntryForm'
 
+import { reverseGeocodeLocation } from '@/components/dispatch/actions'
+
 // Dynamically import map to avoid SSR window is not defined errors
 const LiveDispatchMap = dynamic(() => import('@/components/maps/LiveDispatchMap'), { 
   ssr: false,
   loading: () => <div className="h-full w-full bg-gray-100 dark:bg-gray-900 rounded-xl animate-pulse flex items-center justify-center">Loading Map...</div>
 })
+
+function DriverReadinessCard({ driver, onClick }: { driver: any, onClick: () => void }) {
+  const [address, setAddress] = useState<string>('Locating...')
+  
+  useEffect(() => {
+    if (driver.current_lat && driver.current_lng) {
+      reverseGeocodeLocation(driver.current_lat, driver.current_lng).then(setAddress)
+    } else {
+      setAddress('No GPS Signal')
+    }
+  }, [driver.current_lat, driver.current_lng])
+
+  return (
+    <div 
+      onClick={onClick}
+      className="p-3 bg-gray-50 dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-xl flex justify-between items-center cursor-pointer hover:border-blue-500 hover:shadow-md transition-all group"
+    >
+      <div>
+        <div className="flex items-center gap-2">
+          <div className="font-bold text-gray-900 dark:text-white text-sm group-hover:text-blue-600 transition-colors">{driver.driver_code}</div>
+          <div className="text-[10px] text-gray-500 bg-gray-200 dark:bg-gray-800 px-1.5 py-0.5 rounded">{driver.full_name}</div>
+        </div>
+        <div className="text-xs text-gray-500 mt-1 flex items-center gap-1">
+          <svg className="w-3 h-3 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+          <span className="truncate max-w-[120px]" title={address}>{address}</span>
+        </div>
+      </div>
+      <div className="w-3 h-3 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)] animate-pulse"></div>
+    </div>
+  )
+}
 
 export default function DispatchClient({ initialOrders = [], initialDrivers = [] }: { initialOrders: any[], initialDrivers: any[] }) {
   const [orders, setOrders] = useState<any[]>(initialOrders)
@@ -26,12 +59,13 @@ export default function DispatchClient({ initialOrders = [], initialDrivers = []
   const [mapRoute, setMapRoute] = useState<string | null>(null)
 
   useEffect(() => {
+    const supabase = createClient()
+    
     // 1. Subscribe to Orders
     const ordersChannel = supabase.channel('realtime:orders')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, (payload) => {
-        // Attempt to play a subtle sound (browsers may block if no interaction)
         try {
-          const audio = new Audio('/notification.mp3'); // Need actual file in public/
+          const audio = new Audio('/notification.mp3');
           audio.volume = 0.5;
           audio.play().catch(() => {});
         } catch(e) {}
@@ -39,7 +73,7 @@ export default function DispatchClient({ initialOrders = [], initialDrivers = []
         if (payload.eventType === 'INSERT') {
           setOrders(prev => [payload.new, ...prev])
         } else if (payload.eventType === 'UPDATE') {
-          setOrders(prev => prev.map(o => o.id === payload.new.id ? payload.new : o))
+          setOrders(prev => prev.map(o => o.id === payload.new.id ? { ...o, ...payload.new } : o))
         } else if (payload.eventType === 'DELETE') {
           setOrders(prev => prev.filter(o => o.id !== payload.old.id))
         }
@@ -59,7 +93,7 @@ export default function DispatchClient({ initialOrders = [], initialDrivers = []
       supabase.removeChannel(ordersChannel)
       supabase.removeChannel(driversChannel)
     }
-  }, [supabase])
+  }, [])
 
   // KPIs
   const drafts = orders.filter(o => o.status === 'ai_draft')
@@ -74,6 +108,8 @@ export default function DispatchClient({ initialOrders = [], initialDrivers = []
 
   const availableDrivers = drivers.filter(d => d.availability === 'available')
   const busyDrivers = drivers.filter(d => d.availability === 'busy')
+
+  const [focusedMapLocation, setFocusedMapLocation] = useState<[number, number] | null>(null)
 
   // Map markers mapping
   const driverMarkers = useMemo(() => {
@@ -94,6 +130,7 @@ export default function DispatchClient({ initialOrders = [], initialDrivers = []
     if (order.pickup_lat) setMapPickup([order.pickup_lat, order.pickup_lng])
     if (order.destination_lat) setMapDest([order.destination_lat, order.destination_lng])
     if (order.encoded_polyline) setMapRoute(order.encoded_polyline)
+    setFocusedMapLocation(null)
   }
 
   const handleNewOrder = () => {
@@ -102,6 +139,13 @@ export default function DispatchClient({ initialOrders = [], initialDrivers = []
     setMapPickup(null)
     setMapDest(null)
     setMapRoute(null)
+    setFocusedMapLocation(null)
+  }
+
+  const handleDriverCardClick = (d: any) => {
+    if (d.current_lat && d.current_lng) {
+      setFocusedMapLocation([d.current_lat, d.current_lng])
+    }
   }
 
   const renderOrderCard = (order: any) => (
@@ -208,11 +252,16 @@ export default function DispatchClient({ initialOrders = [], initialDrivers = []
               pickup={mapPickup}
               destination={mapDest}
               encodedPolyline={mapRoute}
+              focusedLocation={focusedMapLocation}
               onDriverClick={(id) => {
-                // If order form is open, assign this driver. Otherwise, maybe just view driver?
                 if (isOrderFormOpen) {
-                  // The form handles this internally via nearestDriverEngine, but we can emit an event or rely on the form
                   alert("Click driver inside the Order Entry Form to assign.")
+                } else {
+                  // Pan to driver
+                  const d = drivers.find(drv => drv.id === id)
+                  if (d?.current_lat && d?.current_lng) {
+                    setFocusedMapLocation([d.current_lat, d.current_lng])
+                  }
                 }
               }}
             />
@@ -220,18 +269,15 @@ export default function DispatchClient({ initialOrders = [], initialDrivers = []
           
           {/* Compact Driver Readiness List */}
           <div className="h-48 bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 p-4 flex flex-col shadow-sm">
-            <h3 className="font-bold text-gray-900 dark:text-white mb-3 text-sm">Available Fleet Readiness</h3>
-            <div className="flex-1 overflow-y-auto grid grid-cols-2 lg:grid-cols-3 gap-3">
+            <h3 className="font-bold text-gray-900 dark:text-white mb-3 text-sm flex justify-between items-center">
+              Available Fleet Readiness
+              <span className="text-xs font-normal text-gray-500 bg-gray-100 dark:bg-gray-800 px-2 py-0.5 rounded-full">{availableDrivers.length} Online</span>
+            </h3>
+            <div className="flex-1 overflow-y-auto grid grid-cols-2 lg:grid-cols-3 gap-3 pr-2">
               {availableDrivers.map(d => (
-                <div key={d.id} className="p-2 bg-gray-50 dark:bg-gray-950 border border-gray-100 dark:border-gray-800 rounded-lg flex justify-between items-center">
-                  <div>
-                    <div className="font-bold text-gray-900 dark:text-white text-xs">{d.driver_code}</div>
-                    <div className="text-[10px] text-gray-500">{d.full_name}</div>
-                  </div>
-                  <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
-                </div>
+                <DriverReadinessCard key={d.id} driver={d} onClick={() => handleDriverCardClick(d)} />
               ))}
-              {availableDrivers.length === 0 && <div className="text-sm text-gray-500 italic">All drivers are busy.</div>}
+              {availableDrivers.length === 0 && <div className="text-sm text-gray-500 italic flex items-center col-span-full justify-center mt-6">All drivers are busy or offline.</div>}
             </div>
           </div>
 

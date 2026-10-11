@@ -80,6 +80,16 @@ function MapBoundsFitter({ pickup, dest }: { pickup: [number, number] | null, de
   return null
 }
 
+function MapFocusHandler({ location }: { location?: [number, number] | null }) {
+  const map = useMap()
+  useEffect(() => {
+    if (location) {
+      map.flyTo(location, 16, { animate: true, duration: 1 })
+    }
+  }, [location, map])
+  return null
+}
+
 export type DriverMarker = {
   id: string;
   driver_code: string;
@@ -97,6 +107,7 @@ interface LiveDispatchMapProps {
   encodedPolyline?: string | null;
   distanceKm?: number;
   durationMins?: number;
+  focusedLocation?: [number, number] | null;
   onMapClick?: (lat: number, lng: number) => void;
   onDriverClick?: (driverId: string) => void;
 }
@@ -108,6 +119,7 @@ export default function LiveDispatchMap({
   encodedPolyline = null,
   distanceKm,
   durationMins,
+  focusedLocation = null,
   onMapClick,
   onDriverClick
 }: LiveDispatchMapProps) {
@@ -164,6 +176,7 @@ export default function LiveDispatchMap({
         {onMapClick && <MapEventsHandler onClick={onMapClick} />}
         
         <MapBoundsFitter pickup={pickup} dest={destination} />
+        <MapFocusHandler location={focusedLocation} />
 
         {/* Drivers */}
         {drivers.map(d => (
