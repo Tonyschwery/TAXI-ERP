@@ -116,9 +116,11 @@ export async function POST(req: Request) {
     // 6. Trigger AI Processor if bot is handling
     if (session.session_status === 'bot_handling' || session.session_status === 'awaiting_info') {
       console.log(`[WhatsApp] Triggering AI processing for Session ${session.id}`)
-      processWhatsAppSessionWithAI(session.id).catch(err => {
+      try {
+        await processWhatsAppSessionWithAI(session.id)
+      } catch (err) {
         console.error('[AI Processing Error]', err)
-      })
+      }
     }
 
     return NextResponse.json({ status: 'success' })
