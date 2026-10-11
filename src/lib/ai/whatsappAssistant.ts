@@ -114,73 +114,46 @@ If they are missing locations, ALWAYS include this exact booking form link in yo
       aiText = response.text || ''
       break; // Success, break out of retry loop
     } catch (err: any) {
-      if (err.status === 429 || err.message?.includes('exceeded your current quota')) {
-        console.warn('Quota exceeded for gemini-3.8-flash. Falling back to gemini-3.8-pro...')
-        try {
-          const proResponse = await ai.models.generateContent({
-            model: 'gemini-3.8-pro',
-            contents: [{ role: 'user', parts: [{ text: userContent }] }],
-            config: {
-              systemInstruction: systemPrompt,
-              responseMimeType: 'application/json',
-              temperature: 0.2
-            }
-          })
-          aiText = proResponse.text || ''
-          break;
-        } catch (proErr: any) {
-          const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
-          console.error('Both Flash and Pro models failed:', proErr)
-          await supabase.from('whatsapp_sessions').update({
-            session_status: 'human_escalated',
-            extracted_notes: 'AI Quota Exceeded (Both Flash and Pro failed).'
-          }).eq('id', session.id)
-
-          await supabase.from('whatsapp_messages').insert([{
-            session_id: session.id,
-            direction: 'outbound',
-            message_type: 'text',
-            raw_text: `Our AI is currently overloaded. Please book your ride directly using this link:\n${appUrl}/customer-booking/${session.id}`
-          }])
-          return
-        }
-      }
-
-      if (err.status === 503 || err.message?.includes('UNAVAILABLE')) {
-        console.warn(`gemini-3.8-flash overloaded. Retries left: ${retries - 1}`)
+      console.warn('Gemini Flash error:', err.message || err)
+      try {
+        console.warn('Attempting gemini-3.8-pro fallback...')
+        const proResponse = await ai.models.generateContent({
+          model: 'gemini-3.8-pro',
+          contents: [{ role: 'user', parts: [{ text: userContent }] }],
+          config: {
+            systemInstruction: systemPrompt,
+            responseMimeType: 'application/json',
+            temperature: 0.2
+          }
+        })
+        aiText = proResponse.text || ''
+        break;
+      } catch (proErr: any) {
+        console.error('Both Flash and Pro models failed:', proErr)
         retries--
         if (retries === 0) {
-          const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
-          console.error('AI API Error Exhausted Retries:', err)
+          const fallbackMsg = `Our AI is currently experiencing high volume. Please secure your ride directly using this link:\n${appUrl}/customer-booking/${session.id}`
           await supabase.from('whatsapp_sessions').update({
             session_status: 'human_escalated',
-            extracted_notes: 'AI Failed: ' + err.message
+            extracted_notes: 'AI Overloaded: ' + (proErr.message || err.message)
           }).eq('id', session.id)
 
           await supabase.from('whatsapp_messages').insert([{
             session_id: session.id,
             direction: 'outbound',
             message_type: 'text',
-            raw_text: `We are experiencing high volume. Please secure your ride directly here:\n${appUrl}/customer-booking/${session.id}`
+            raw_text: fallbackMsg
           }])
+
+          const line = (session.whatsapp_business_number as 'line_1' | 'line_2') || 'line_1'
+          try {
+            await sendWhatsAppMessage(line, session.customer_phone, fallbackMsg)
+          } catch (e: any) {
+            console.error('[WhatsApp Send Fallback Error]', e.message)
+          }
           return
         }
-        await new Promise(resolve => setTimeout(resolve, 3000)) // Wait 3s
-      } else {
-        const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
-        console.error('AI API Error:', err)
-        await supabase.from('whatsapp_sessions').update({
-          session_status: 'human_escalated',
-          extracted_notes: 'AI Failed: ' + err.message
-        }).eq('id', session.id)
-
-        await supabase.from('whatsapp_messages').insert([{
-          session_id: session.id,
-          direction: 'outbound',
-          message_type: 'text',
-          raw_text: `To get a driver instantly, please fill out your locations here:\n${appUrl}/customer-booking/${session.id}`
-        }])
-        return
+        await new Promise(resolve => setTimeout(resolve, 2000))
       }
     }
   }
