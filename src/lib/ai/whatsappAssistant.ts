@@ -1,5 +1,6 @@
 import { GoogleGenAI } from '@google/genai'
 import { createClient } from '@supabase/supabase-js'
+import { sendWhatsAppMessage } from '@/lib/whatsapp/client'
 
 export async function processWhatsAppSessionWithAI(sessionId: string) {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
@@ -256,5 +257,12 @@ If they are missing locations, ALWAYS include this exact booking form link in yo
       message_type: 'text',
       raw_text: parsed.suggested_operator_reply
     }])
+
+    const line = (session.whatsapp_business_number as 'line_1' | 'line_2') || 'line_1'
+    try {
+      await sendWhatsAppMessage(line, session.customer_phone, parsed.suggested_operator_reply)
+    } catch (err: any) {
+      console.error('[WhatsApp Send Error]', err.message)
+    }
   }
 }
