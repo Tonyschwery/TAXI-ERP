@@ -1,8 +1,10 @@
 import { createClient } from '@supabase/supabase-js'
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
-const supabase = createClient(supabaseUrl, supabaseKey);
+function getSupabase() {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://cljmmzzetajamciohcan.supabase.co';
+  const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+  return createClient(supabaseUrl, supabaseKey);
+}
 
 export function getHaversineDistance(lat1: number, lon1: number, lat2: number, lon2: number) {
   const R = 6371; // km
@@ -70,7 +72,7 @@ export async function searchPlaceAutocomplete(query: string) {
 
   // 1. Search Local Dialect Landmarks
   try {
-    const { data: localPlaces } = await supabase
+    const { data: localPlaces } = await getSupabase()
       .from('dialect_landmarks')
       .select('*')
       .ilike('name', `%${query}%`)
@@ -131,3 +133,74 @@ export async function searchPlaceAutocomplete(query: string) {
 
   return results;
 }
+
+export async function reverseGeocodeLocation(lat: number, lng: number): Promise<string> {
+  const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY;
+  if (apiKey) {
+    try {
+      const res = await fetch(`https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&key=${apiKey}`);
+      const data = await res.json();
+      if (data.results && data.results.length > 0) {
+        return data.results[0].formatted_address.split(',').slice(0, 2).join(',').trim();
+      }
+    } catch (e) {
+      console.error("Reverse geocoding error:", e);
+    }
+  }
+
+  // Fallback to OpenStreetMap Nominatim
+  try {
+    const res = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`, {
+      headers: { 'User-Agent': 'TaxiERP-Dispatch/1.0' }
+    });
+    const data = await res.json();
+    if (data.display_name) {
+      return data.display_name.split(',').slice(0, 2).join(',').trim();
+    }
+  } catch (e) {
+    console.error("OSM Reverse geocoding error:", e);
+  }
+
+  return "Location Pin";
+}
+
+export async function geocodePlaceName(placeName: string): Promise<{ lat: number, lng: number, formattedAddress: string } | null> {
+  if (!placeName) return null;
+  const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY;
+  if (apiKey) {
+    try {
+      const res = await fetch(`https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(placeName + ', Lebanon')}&key=${apiKey}`);
+      const data = await res.json();
+      if (data.results && data.results.length > 0) {
+        const loc = data.results[0].geometry.location;
+        return {
+          lat: loc.lat,
+          lng: loc.lng,
+          formattedAddress: data.results[0].formatted_address.split(',').slice(0, 2).join(',').trim()
+        };
+      }
+    } catch (e) {
+      console.error("Geocoding error:", e);
+    }
+  }
+
+  // Fallback to OSM
+  try {
+    const res = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(placeName + ', Lebanon')}&format=json&limit=1`, {
+      headers: { 'User-Agent': 'TaxiERP-Dispatch/1.0' }
+    });
+    const data = await res.json();
+    if (data && data.length > 0) {
+      return {
+        lat: parseFloat(data[0].lat),
+        lng: parseFloat(data[0].lon),
+        formattedAddress: data[0].display_name.split(',').slice(0, 2).join(',').trim()
+      };
+    }
+  } catch (e) {
+    console.error("OSM Geocoding error:", e);
+  }
+
+  return null;
+}
+
