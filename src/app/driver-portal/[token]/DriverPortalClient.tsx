@@ -35,7 +35,19 @@ export default function DriverPortalClient({
   const [isWakeLockActive, setIsWakeLockActive] = useState(false)
   const wakeLockRef = useRef<any>(null)
   const lastGpsUpdateRef = useRef<number>(0)
-  const lastCoordsRef = useRef<{lat: number, lng: number} | null>(null)
+  const lastCoordsRef = useRef<{lat: number, lng: number} | null>(
+    driver.current_lat && driver.current_lng ? { lat: driver.current_lat, lng: driver.current_lng } : null
+  )
+  const [gpsStatus, setGpsStatus] = useState<{
+    status: 'locating' | 'broadcasting' | 'error'
+    message?: string
+    lat?: number
+    lng?: number
+    lastUpdated?: string
+  }>({
+    status: 'locating',
+    message: 'Acquiring GPS location...'
+  })
 
   // Distance calculator helper
   const getDistance = (lat1: number, lon1: number, lat2: number, lon2: number) => {
@@ -47,6 +59,26 @@ export default function DriverPortalClient({
               Math.sin(dLon/2) * Math.sin(dLon/2);
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
     return R * c;
+  }
+
+  // Transmit GPS coordinates to server
+  const transmitGps = (lat: number, lng: number) => {
+    lastGpsUpdateRef.current = Date.now()
+    lastCoordsRef.current = { lat, lng }
+    setGpsStatus({
+      status: 'broadcasting',
+      lat,
+      lng,
+      lastUpdated: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+    })
+
+    fetch('/api/driver-portal/gps', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token, lat, lng })
+    }).catch((err) => {
+      console.warn('[driver-portal] GPS ping network issue:', err)
+    })
   }
 
   useEffect(() => {
@@ -98,9 +130,9 @@ export default function DriverPortalClient({
     }
   }, [driver.id, token, supabase])
 
-  // Screen Wake Lock & GPS Engine
+  // Screen Wake Lock Engine
   useEffect(() => {
-    let watchId: number
+    const shouldBeActive = isAvailable || activeOrder !== null
 
     const requestWakeLock = async () => {
       if ('wakeLock' in navigator) {
@@ -123,53 +155,11 @@ export default function DriverPortalClient({
           wakeLockRef.current = null
         })
       }
+      setIsWakeLockActive(false)
     }
 
-    const shouldBeActive = isAvailable || activeOrder !== null
-
     if (shouldBeActive) {
-      // 1. Request Wake Lock
       requestWakeLock()
-
-      // 2. Start precise GPS tracking
-      if ('geolocation' in navigator) {
-        watchId = navigator.geolocation.watchPosition(
-          (pos) => {
-            const now = Date.now()
-            const lat = pos.coords.latitude
-            const lng = pos.coords.longitude
-            const lastCoords = lastCoordsRef.current
-            
-            // Throttle: Update if 15 seconds passed OR moved more than 30 meters
-            let shouldUpdate = false
-            if (now - lastGpsUpdateRef.current > 15000) {
-              shouldUpdate = true
-            } else if (lastCoords) {
-              const distanceMoved = getDistance(lastCoords.lat, lastCoords.lng, lat, lng)
-              if (distanceMoved > 30) {
-                shouldUpdate = true
-              }
-            } else {
-              shouldUpdate = true
-            }
-
-            if (shouldUpdate) {
-              lastGpsUpdateRef.current = now
-              lastCoordsRef.current = { lat, lng }
-              
-              fetch('/api/driver-portal/gps', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ token, lat, lng })
-              }).catch(() => {})
-            }
-          },
-          (err) => console.error(err),
-          { enableHighAccuracy: true, maximumAge: 10000, timeout: 5000 }
-        )
-      }
-
-      // Re-request wake lock if visibility changes (browser security feature)
       const handleVisibilityChange = () => {
         if (wakeLockRef.current !== null && document.visibilityState === 'visible') {
           requestWakeLock()
@@ -178,14 +168,88 @@ export default function DriverPortalClient({
       document.addEventListener('visibilitychange', handleVisibilityChange)
 
       return () => {
-        if (watchId) navigator.geolocation.clearWatch(watchId)
         document.removeEventListener('visibilitychange', handleVisibilityChange)
         releaseWakeLock()
       }
     } else {
       releaseWakeLock()
     }
-  }, [isAvailable, activeOrder, token])
+  }, [isAvailable, activeOrder])
+
+  // Continuous Mobile GPS Tracking (Always starts immediately on open)
+  useEffect(() => {
+    if (!('geolocation' in navigator)) {
+      setGpsStatus({ status: 'error', message: 'Geolocation is not supported by your browser' })
+      return
+    }
+
+    let watchId: number | null = null
+
+    const handlePos = (pos: GeolocationPosition) => {
+      const now = Date.now()
+      const lat = pos.coords.latitude
+      const lng = pos.coords.longitude
+      const lastCoords = lastCoordsRef.current
+
+      // First fix OR 10s elapsed OR moved > 15 meters
+      let shouldUpdate = false
+      if (!lastCoords || now - lastGpsUpdateRef.current > 10000) {
+        shouldUpdate = true
+      } else {
+        const distanceMoved = getDistance(lastCoords.lat, lastCoords.lng, lat, lng)
+        if (distanceMoved > 15) {
+          shouldUpdate = true
+        }
+      }
+
+      if (shouldUpdate) {
+        transmitGps(lat, lng)
+      }
+    }
+
+    // 1. Immediate initial fix with high accuracy (15s timeout)
+    navigator.geolocation.getCurrentPosition(
+      handlePos,
+      (err) => {
+        console.warn('[GPS] Initial high-accuracy failed, falling back to standard accuracy:', err)
+        // Fallback without high accuracy (cellular/WiFi triangulation)
+        navigator.geolocation.getCurrentPosition(
+          handlePos,
+          (err2) => {
+            console.error('[GPS] Standard accuracy also failed:', err2)
+            setGpsStatus({
+              status: 'error',
+              message: err2.code === 1 ? 'Location permission needed to reflect on Dispatch Map.' : 'Could not acquire GPS position.'
+            })
+          },
+          { enableHighAccuracy: false, timeout: 20000, maximumAge: 60000 }
+        )
+      },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+    )
+
+    // 2. Start continuous GPS watch
+    try {
+      watchId = navigator.geolocation.watchPosition(
+        handlePos,
+        (err) => {
+          console.warn('[GPS] watchPosition error:', err)
+          if (err.code === 1) {
+            setGpsStatus({ status: 'error', message: 'Location permission denied' })
+          }
+        },
+        { enableHighAccuracy: true, maximumAge: 5000, timeout: 20000 }
+      )
+    } catch (e) {
+      console.error('Failed to start watchPosition:', e)
+    }
+
+    return () => {
+      if (watchId !== null) {
+        navigator.geolocation.clearWatch(watchId)
+      }
+    }
+  }, [token])
 
   const triggerAlert = () => {
     if (navigator.vibrate) navigator.vibrate([200, 100, 200, 100, 500])
@@ -196,8 +260,13 @@ export default function DriverPortalClient({
     setIsAvailable(!isAvailable)
     await fetch('/api/driver-portal/action', {
       method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ token, action: 'toggle_availability', data: { availability: newAvail } })
     })
+    // If going online and we have coordinates, immediately push fresh GPS ping
+    if (newAvail === 'available' && lastCoordsRef.current) {
+      transmitGps(lastCoordsRef.current.lat, lastCoordsRef.current.lng)
+    }
   }
 
   const handleStatusUpdate = async (status: string) => {
@@ -268,15 +337,48 @@ export default function DriverPortalClient({
               {isAvailable ? '✅ ONLINE & AVAILABLE' : '❌ OFFLINE'}
             </button>
 
-            {/* Wake Lock Indicator */}
-            {(isAvailable || activeOrder) && (
-              <div className="mt-3 flex justify-center items-center gap-2">
-                <div className={`w-2 h-2 rounded-full ${isWakeLockActive ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`}></div>
-                <span className="text-[10px] text-gray-500 font-bold tracking-widest uppercase">
-                  {isWakeLockActive ? 'Screen Awake & GPS Active' : 'Screen Lock Disabled'}
-                </span>
+            {/* Live GPS & Screen Status Card */}
+            <div className="mt-3 p-3 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl shadow-sm">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  {gpsStatus.status === 'broadcasting' && (
+                    <>
+                      <span className="w-2.5 h-2.5 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.8)] animate-pulse"></span>
+                      <span className="text-xs font-bold text-gray-900 dark:text-white">
+                        Live GPS Broadcasting
+                      </span>
+                    </>
+                  )}
+                  {gpsStatus.status === 'locating' && (
+                    <>
+                      <span className="w-2.5 h-2.5 rounded-full bg-yellow-500 animate-ping"></span>
+                      <span className="text-xs font-bold text-yellow-600 dark:text-yellow-400">
+                        {gpsStatus.message || 'Acquiring GPS location...'}
+                      </span>
+                    </>
+                  )}
+                  {gpsStatus.status === 'error' && (
+                    <>
+                      <span className="w-2.5 h-2.5 rounded-full bg-red-500"></span>
+                      <span className="text-xs font-bold text-red-600 dark:text-red-400">
+                        {gpsStatus.message || 'GPS Signal Offline'}
+                      </span>
+                    </>
+                  )}
+                </div>
+                {gpsStatus.lastUpdated && (
+                  <span className="text-[10px] text-gray-400 font-mono">
+                    {gpsStatus.lastUpdated}
+                  </span>
+                )}
               </div>
-            )}
+              
+              {isWakeLockActive && (
+                <div className="text-[10px] text-green-600 dark:text-green-400 font-semibold mt-1.5 flex items-center gap-1">
+                  <span>📱</span> Screen Kept Awake & Standby Mode
+                </div>
+              )}
+            </div>
 
             {!isAvailable && !activeOrder && (
               <div className="mt-8 text-center text-gray-500 font-bold">

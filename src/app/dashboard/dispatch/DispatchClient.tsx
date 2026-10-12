@@ -24,6 +24,10 @@ function DriverReadinessCard({ driver, onClick }: { driver: any, onClick: () => 
     }
   }, [driver.current_lat, driver.current_lng])
 
+  const lastPingFormatted = driver.last_gps_update 
+    ? new Date(driver.last_gps_update).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+    : null
+
   return (
     <div 
       onClick={onClick}
@@ -35,11 +39,16 @@ function DriverReadinessCard({ driver, onClick }: { driver: any, onClick: () => 
           <div className="text-[10px] text-gray-500 bg-gray-200 dark:bg-gray-800 px-1.5 py-0.5 rounded">{driver.full_name}</div>
         </div>
         <div className="text-xs text-gray-500 mt-1 flex items-center gap-1">
-          <svg className="w-3 h-3 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
-          <span className="truncate max-w-[120px]" title={address}>{address}</span>
+          <svg className="w-3 h-3 text-gray-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+          <span className="truncate max-w-[130px]" title={address}>{address}</span>
         </div>
+        {lastPingFormatted && (
+          <div className="text-[9px] text-gray-400 font-mono mt-0.5 flex items-center gap-1">
+            <span>📡</span> {lastPingFormatted}
+          </div>
+        )}
       </div>
-      <div className="w-3 h-3 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)] animate-pulse"></div>
+      <div className="w-3 h-3 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)] animate-pulse shrink-0"></div>
     </div>
   )
 }
@@ -84,14 +93,28 @@ export default function DispatchClient({ initialOrders = [], initialDrivers = []
     const driversChannel = supabase.channel('realtime:drivers')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'drivers' }, (payload) => {
         if (payload.eventType === 'UPDATE') {
-          setDrivers(prev => prev.map(d => d.id === payload.new.id ? { ...d, ...payload.new } : d))
+          setDrivers(prev => prev.map(d => d.id === payload.new.id ? { ...d, ...payload.new, driver_categories: d.driver_categories } : d))
+        } else if (payload.eventType === 'INSERT') {
+          setDrivers(prev => [...prev, payload.new])
         }
       })
       .subscribe()
 
+    // 3. Heartbeat polling fallback (ensures latest driver GPS positions every 10s)
+    const pollInterval = setInterval(async () => {
+      const { data } = await supabase
+        .from('drivers')
+        .select('*, driver_categories(name)')
+        .eq('is_active', true)
+      if (data && data.length > 0) {
+        setDrivers(data)
+      }
+    }, 10000)
+
     return () => {
       supabase.removeChannel(ordersChannel)
       supabase.removeChannel(driversChannel)
+      clearInterval(pollInterval)
     }
   }, [])
 
