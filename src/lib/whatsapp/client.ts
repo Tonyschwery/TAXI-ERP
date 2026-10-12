@@ -1,3 +1,5 @@
+import crypto from 'crypto'
+
 /**
  * Helper client to send outbound WhatsApp messages via Meta Cloud API.
  */
@@ -20,7 +22,14 @@ export async function sendWhatsAppMessage(
   // Strip leading '+' if present for WhatsApp API
   const to = recipientPhone.replace('+', '')
 
-  const response = await fetch(`https://graph.facebook.com/v18.0/${phoneNumberId}/messages`, {
+  let url = `https://graph.facebook.com/v18.0/${phoneNumberId}/messages`
+  const appSecret = process.env.WHATSAPP_APP_SECRET
+  if (appSecret) {
+    const proof = crypto.createHmac('sha256', appSecret).update(token).digest('hex')
+    url += `?appsecret_proof=${proof}`
+  }
+
+  const response = await fetch(url, {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${token}`,

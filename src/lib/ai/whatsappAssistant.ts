@@ -103,7 +103,7 @@ If they are missing locations, ALWAYS include this exact booking form link in yo
   while (retries > 0) {
     try {
       const response = await ai.models.generateContent({
-        model: 'gemini-3.8-flash',
+        model: 'gemini-3.5-flash',
         contents: [{ role: 'user', parts: [{ text: userContent }] }],
         config: {
           systemInstruction: systemPrompt,
@@ -114,11 +114,11 @@ If they are missing locations, ALWAYS include this exact booking form link in yo
       aiText = response.text || ''
       break; // Success, break out of retry loop
     } catch (err: any) {
-      console.warn('Gemini Flash error:', err.message || err)
+      console.warn('Gemini 3.5 Flash error:', err.message || err)
       try {
-        console.warn('Attempting gemini-3.8-pro fallback...')
+        console.warn('Attempting gemini-3.1-flash-lite fallback...')
         const proResponse = await ai.models.generateContent({
-          model: 'gemini-3.8-pro',
+          model: 'gemini-3.1-flash-lite',
           contents: [{ role: 'user', parts: [{ text: userContent }] }],
           config: {
             systemInstruction: systemPrompt,
