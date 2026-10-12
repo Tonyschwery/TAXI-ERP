@@ -39,8 +39,8 @@ export default async function DriversPage() {
     .eq('is_active', true)
     .order('plate_number')
 
-  // Get APP_URL from env or fallback to localhost
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
+  // Get APP_URL from env or fallback to production URL
+  const appUrl = (process.env.NEXT_PUBLIC_APP_URL || 'https://taxi-erp.vercel.app').replace(/\/$/, '')
 
   return (
     <div className="max-w-7xl mx-auto space-y-8">

@@ -159,8 +159,14 @@ export default function DriverManager({
                   source = 'Category Default'
                 }
 
-                const portalLink = `${appUrl}/driver-portal/${d.secure_access_token}`
-                const whatsappLink = `https://wa.me/${d.phone}?text=${encodeURIComponent(`Welcome to the Taxi Dispatch! Your secure driver portal link is:\n${portalLink}`)}`
+                // Ensure we never use localhost:3000 unless strictly running locally
+                const effectiveBaseUrl = (typeof window !== 'undefined' && window.location.origin && !window.location.origin.includes('localhost')
+                  ? window.location.origin
+                  : (appUrl && !appUrl.includes('localhost') ? appUrl : 'https://taxi-erp.vercel.app')
+                ).replace(/\/$/, '')
+
+                const portalLink = `${effectiveBaseUrl}/driver-portal/${d.secure_access_token}`
+                const whatsappLink = `https://wa.me/${d.phone}?text=${encodeURIComponent(`Welcome to the Taxi Dispatch! Your secure driver portal link is:\n${portalLink}\nDriver Code: ${d.driver_code}`)}`
 
                 return (
                   <tr key={d.id} className={`hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors ${!d.is_active ? 'opacity-60' : ''}`}>
@@ -197,21 +203,24 @@ export default function DriverManager({
                       </div>
                     </td>
                     <td className="px-6 py-4 space-y-2">
-                      <div className="flex items-center gap-2">
-                        <button onClick={() => copyToClipboard(portalLink)} className="text-xs bg-blue-100 hover:bg-blue-200 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 px-2 py-1 rounded transition-colors">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <button onClick={() => copyToClipboard(portalLink)} className="text-xs bg-blue-100 hover:bg-blue-200 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 px-2 py-1 rounded transition-colors font-medium">
                           Copy Link
+                        </button>
+                        <button onClick={() => copyToClipboard(d.secure_access_token)} className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 dark:bg-gray-800 dark:text-gray-300 px-2 py-1 rounded transition-colors font-medium" title="Copy raw portal access token">
+                          Copy Token
                         </button>
                         {(() => {
                           const cleanPhone = d.phone.replace(/[^0-9+]/g, '');
-                          const wpLink = `https://wa.me/${cleanPhone}?text=${encodeURIComponent(`Welcome to the Taxi Dispatch! Your secure driver portal link is:\n${portalLink}`)}`;
+                          const wpLink = `https://wa.me/${cleanPhone}?text=${encodeURIComponent(`Welcome to the Taxi Dispatch! Your secure driver portal link is:\n${portalLink}\nDriver Code: ${d.driver_code}`)}`;
                           return (
-                            <a href={wpLink} target="_blank" rel="noreferrer" className="text-xs bg-green-100 hover:bg-green-200 text-green-700 dark:bg-green-900/30 dark:text-green-400 px-2 py-1 rounded transition-colors">
+                            <a href={wpLink} target="_blank" rel="noreferrer" className="text-xs bg-green-100 hover:bg-green-200 text-green-700 dark:bg-green-900/30 dark:text-green-400 px-2 py-1 rounded transition-colors font-medium">
                               WhatsApp
                             </a>
                           )
                         })()}
                       </div>
-                      <button onClick={() => handleRegenerate(d.id)} className="text-[10px] text-red-500 hover:text-red-700 underline">
+                      <button onClick={() => handleRegenerate(d.id)} className="text-[10px] text-red-500 hover:text-red-700 underline block">
                         Regenerate Token
                       </button>
                     </td>
