@@ -84,8 +84,11 @@ export default async function DashboardLayout({
               <Link href="/dashboard/expenses" className="flex items-center gap-3 px-3 py-2 rounded-md hover:bg-gray-800 text-gray-300 hover:text-white transition-colors">
                 <Activity className="w-5 h-5" /> Vehicle Expenses
               </Link>
-              <Link href="/dashboard/statements" className="flex items-center gap-3 px-3 py-2 rounded-md hover:bg-gray-800 text-gray-300 hover:text-white transition-colors">
-                <FileText className="w-5 h-5" /> Statements
+              <Link href="/dashboard/statements/drivers" className="flex items-center gap-3 px-3 py-2 rounded-md hover:bg-gray-800 text-gray-300 hover:text-white transition-colors">
+                <FileText className="w-5 h-5" /> Driver Statements
+              </Link>
+              <Link href="/dashboard/statements/vehicles" className="flex items-center gap-3 px-3 py-2 rounded-md hover:bg-gray-800 text-gray-300 hover:text-white transition-colors">
+                <FileText className="w-5 h-5" /> Vehicle Statements
               </Link>
             </>
           )}

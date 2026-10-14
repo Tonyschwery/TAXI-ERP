@@ -9,7 +9,7 @@ export default async function VehicleStatementsPage() {
 
   const { data: profile } = await supabase.from('profiles').select('role').eq('id', user.id).single()
   const role = profile?.role || 'operator'
-  if (!['admin', 'operator'].includes(role)) {
+  if (!['admin', 'operator', 'accounting'].includes(role)) {
     redirect('/login')
   }
 
