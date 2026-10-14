@@ -10,11 +10,37 @@ import {
   lookupCustomer,
   searchPlaces,
   getPlaceDetails,
-  operatorCancelOrder
+  operatorCancelOrder,
+  reverseGeocodeLocation
 } from './actions'
 import { createClient } from '@/lib/supabase/client'
+import WhatsAppButton from '@/components/ui/WhatsAppButton'
 
-export default function OrderEntryForm({ initialOrder = null, onSaved, onRouteUpdate }: { initialOrder?: any, onSaved?: () => void, onRouteUpdate?: (pickup: [number, number] | null, dest: [number, number] | null, polyline: string | null) => void }) {
+interface OrderEntryFormProps {
+  initialOrder?: any
+  onSaved?: () => void
+  onRouteUpdate?: (
+    pickup: [number, number] | null,
+    dest: [number, number] | null,
+    polyline: string | null,
+    distanceKm?: number,
+    durationMins?: number
+  ) => void
+  externalPickup?: [number, number] | null
+  selectedDriverId?: string | null
+  onDriverSelect?: (driverId: string) => void
+  allDrivers?: any[]
+}
+
+export default function OrderEntryForm({
+  initialOrder = null,
+  onSaved,
+  onRouteUpdate,
+  externalPickup = null,
+  selectedDriverId = null,
+  onDriverSelect,
+  allDrivers = []
+}: OrderEntryFormProps) {
   // Config state
   const [rules, setRules] = useState<PricingRule[]>([])
   const [methods, setMethods] = useState<any[]>([])
@@ -50,12 +76,32 @@ export default function OrderEntryForm({ initialOrder = null, onSaved, onRouteUp
   const [assignedDriverId, setAssignedDriverId] = useState<string | null>(initialOrder?.assigned_driver_id || null)
   const [recommendedDrivers, setRecommendedDrivers] = useState<any[]>([])
 
+  const assignedDriver = 
+    recommendedDrivers.find(d => d.id === assignedDriverId) ||
+    allDrivers.find(d => d.id === assignedDriverId) || null
+
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [isCalculatingRoute, setIsCalculatingRoute] = useState(false)
 
-  // Autocomplete UI state
+  // Autocomplete UI state & debounce timers
   const [pickupResults, setPickupResults] = useState<any[]>([])
   const [destResults, setDestResults] = useState<any[]>([])
+  const [isPickupOpen, setIsPickupOpen] = useState(false)
+  const [isDestOpen, setIsDestOpen] = useState(false)
+  const [isSearchingPickup, setIsSearchingPickup] = useState(false)
+  const [isSearchingDest, setIsSearchingDest] = useState(false)
+  const pickupSearchTimer = useRef<NodeJS.Timeout | null>(null)
+  const destSearchTimer = useRef<NodeJS.Timeout | null>(null)
+  const pickupRequestId = useRef(0)
+  const destRequestId = useRef(0)
+
+  useEffect(() => {
+    return () => {
+      if (pickupSearchTimer.current) clearTimeout(pickupSearchTimer.current)
+      if (destSearchTimer.current) clearTimeout(destSearchTimer.current)
+    }
+  }, [])
 
   useEffect(() => {
     getActiveRulesAndMethods().then(({ rules, methods }) => {
@@ -63,6 +109,25 @@ export default function OrderEntryForm({ initialOrder = null, onSaved, onRouteUp
       setMethods(methods)
     })
   }, [])
+
+  // Sync external driver selection (e.g. from clicking driver on map or fleet list)
+  useEffect(() => {
+    if (selectedDriverId) {
+      setAssignedDriverId(selectedDriverId)
+    }
+  }, [selectedDriverId])
+
+  // Sync external pickup click (e.g. from clicking on the map)
+  useEffect(() => {
+    if (externalPickup && externalPickup[0] && externalPickup[1]) {
+      const [lat, lng] = externalPickup
+      setPickupLat(lat)
+      setPickupLng(lng)
+      reverseGeocodeLocation(lat, lng).then(addr => {
+        setPickupAddr(addr && addr !== 'Unknown Location' ? addr : `${lat.toFixed(4)}, ${lng.toFixed(4)}`)
+      })
+    }
+  }, [externalPickup])
 
   // Customer Lookup Debounce
   useEffect(() => {
@@ -87,10 +152,12 @@ export default function OrderEntryForm({ initialOrder = null, onSaved, onRouteUp
   // Routing trigger
   useEffect(() => {
     if (pickupLat && pickupLng && destLat && destLng) {
+      setIsCalculatingRoute(true)
       fetchRouteDetails(pickupLat, pickupLng, destLat, destLng).then(res => {
         setDistanceKm(res.distanceKm)
         setEtaMins(res.durationMinutes)
         setPolyline(res.polyline)
+        setIsCalculatingRoute(false)
 
         // Run pricing calculator
         const activeRules = rules.length > 0 ? rules : [
@@ -117,9 +184,13 @@ export default function OrderEntryForm({ initialOrder = null, onSaved, onRouteUp
           onRouteUpdate(
             pickupLat && pickupLng ? [pickupLat, pickupLng] : null,
             destLat && destLng ? [destLat, destLng] : null,
-            res.polyline || null
+            res.polyline || null,
+            res.distanceKm,
+            res.durationMinutes
           )
         }
+      }).catch(() => {
+        setIsCalculatingRoute(false)
       })
     }
   }, [pickupLat, pickupLng, destLat, destLng, vehicleType, extraCharges, rules, onRouteUpdate])
@@ -136,51 +207,105 @@ export default function OrderEntryForm({ initialOrder = null, onSaved, onRouteUp
     }
   }, [pickupLat, pickupLng, vehicleType])
 
-  const handlePickupSearch = async (val: string) => {
+  const handlePickupChange = (val: string) => {
     setPickupAddr(val)
-    if (val.length > 2) {
-      const res = await searchPlaces(val)
-      setPickupResults(res.length > 0 ? res : [{ name: `${val} (Mock Result)`, lat: 33.89, lng: 35.50, source: 'mock' }])
-    } else {
+    if (pickupSearchTimer.current) clearTimeout(pickupSearchTimer.current)
+    
+    if (val.trim().length <= 2) {
       setPickupResults([])
+      setIsPickupOpen(false)
+      setIsSearchingPickup(false)
+      return
     }
+
+    setIsSearchingPickup(true)
+    setIsPickupOpen(true)
+    const currentId = ++pickupRequestId.current
+
+    pickupSearchTimer.current = setTimeout(async () => {
+      try {
+        const res = await searchPlaces(val.trim())
+        if (currentId === pickupRequestId.current) {
+          setPickupResults(res && res.length > 0 ? res : [{ name: val.trim(), lat: 33.89, lng: 35.50, source: 'fallback' }])
+          setIsSearchingPickup(false)
+        }
+      } catch (err) {
+        if (currentId === pickupRequestId.current) {
+          setIsSearchingPickup(false)
+        }
+      }
+    }, 250)
   }
 
-  const handleDestSearch = async (val: string) => {
+  const handleDestChange = (val: string) => {
     setDestAddr(val)
-    if (val.length > 2) {
-      const res = await searchPlaces(val)
-      setDestResults(res.length > 0 ? res : [{ name: `${val} (Mock Result)`, lat: 33.82, lng: 35.48, source: 'mock' }])
-    } else {
+    if (destSearchTimer.current) clearTimeout(destSearchTimer.current)
+    
+    if (val.trim().length <= 2) {
       setDestResults([])
+      setIsDestOpen(false)
+      setIsSearchingDest(false)
+      return
     }
+
+    setIsSearchingDest(true)
+    setIsDestOpen(true)
+    const currentId = ++destRequestId.current
+
+    destSearchTimer.current = setTimeout(async () => {
+      try {
+        const res = await searchPlaces(val.trim())
+        if (currentId === destRequestId.current) {
+          setDestResults(res && res.length > 0 ? res : [{ name: val.trim(), lat: 33.82, lng: 35.48, source: 'fallback' }])
+          setIsSearchingDest(false)
+        }
+      } catch (err) {
+        if (currentId === destRequestId.current) {
+          setIsSearchingDest(false)
+        }
+      }
+    }, 250)
   }
 
   const selectPickup = async (p: any) => {
+    // Invalidate in-flight search requests immediately
+    pickupRequestId.current++
+    if (pickupSearchTimer.current) clearTimeout(pickupSearchTimer.current)
+
     setPickupAddr(p.name)
     setPickupResults([])
+    setIsPickupOpen(false)
+    setIsSearchingPickup(false)
+
     if (p.place_id && !p.lat) {
-      const details = await getPlaceDetails(p.place_id);
+      const details = await getPlaceDetails(p.place_id)
       if (details) {
         setPickupLat(details.lat)
         setPickupLng(details.lng)
       }
-    } else {
+    } else if (p.lat && p.lng) {
       setPickupLat(p.lat)
       setPickupLng(p.lng)
     }
   }
 
   const selectDest = async (p: any) => {
+    // Invalidate in-flight search requests immediately
+    destRequestId.current++
+    if (destSearchTimer.current) clearTimeout(destSearchTimer.current)
+
     setDestAddr(p.name)
     setDestResults([])
+    setIsDestOpen(false)
+    setIsSearchingDest(false)
+
     if (p.place_id && !p.lat) {
-      const details = await getPlaceDetails(p.place_id);
+      const details = await getPlaceDetails(p.place_id)
       if (details) {
         setDestLat(details.lat)
         setDestLng(details.lng)
       }
-    } else {
+    } else if (p.lat && p.lng) {
       setDestLat(p.lat)
       setDestLng(p.lng)
     }
@@ -303,36 +428,96 @@ export default function OrderEntryForm({ initialOrder = null, onSaved, onRouteUp
 
       {/* Location Section */}
       <div className="space-y-4">
+        {/* Pickup Location */}
         <div className="relative">
-          <div className="flex justify-between items-end mb-1">
-            <label className="block text-xs font-semibold text-gray-500 uppercase">Pickup Location</label>
-            <button type="button" onClick={() => selectPickup({ name: 'Beirut City Center (Demo)', lat: 33.873, lng: 35.534 })} className="text-[10px] text-blue-600 font-bold uppercase hover:underline">Insert Demo</button>
+          <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Pickup Location</label>
+          <div className="relative">
+            <input 
+              type="text" 
+              value={pickupAddr} 
+              onChange={e => handlePickupChange(e.target.value)} 
+              onFocus={() => { if (pickupResults.length > 0) setIsPickupOpen(true) }}
+              onBlur={() => { setTimeout(() => setIsPickupOpen(false), 180) }}
+              className="w-full pl-8 pr-8 py-2 border rounded-lg bg-gray-50 dark:bg-gray-950 dark:border-gray-700 text-sm focus:border-green-500 focus:bg-white dark:focus:bg-gray-900 outline-none transition-colors" 
+              placeholder="Search pickup address, street, or landmark..." 
+            />
+            <div className="absolute left-2.5 top-2.5 text-green-500 pointer-events-none">
+              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                <path fillRule="evenodd" d="M5.05 4.05a7 7 0 119.9 9.9L10 18.9l-4.95-4.95a7 7 0 010-9.9zM10 11a2 2 0 100-4 2 2 0 000 4z" clipRule="evenodd" />
+              </svg>
+            </div>
+            {isSearchingPickup && (
+              <div className="absolute right-3 top-2.5">
+                <div className="w-4 h-4 border-2 border-green-500 border-t-transparent rounded-full animate-spin"></div>
+              </div>
+            )}
           </div>
-          <input type="text" value={pickupAddr} onChange={e => handlePickupSearch(e.target.value)} className="w-full px-3 py-2 border rounded-lg bg-gray-50 dark:bg-gray-950 dark:border-gray-700 text-sm focus:border-green-500 outline-none" placeholder="Type to search (e.g. Beirut)" />
-          {pickupResults.length > 0 && (
-            <div className="absolute z-50 w-full mt-1 bg-white dark:bg-gray-800 border rounded shadow-lg max-h-40 overflow-y-auto">
+          
+          {isPickupOpen && pickupResults.length > 0 && (
+            <div className="absolute z-50 w-full mt-1 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-xl shadow-xl max-h-56 overflow-y-auto divide-y divide-gray-100 dark:divide-gray-800">
               {pickupResults.map((r, i) => (
-                <div key={i} onClick={() => selectPickup(r)} className="px-3 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer border-b last:border-0 dark:border-gray-700">
-                  <span className={`text-[9px] px-1 mr-2 rounded uppercase font-bold text-white ${r.source === 'local' ? 'bg-purple-500' : 'bg-gray-500'}`}>{r.source}</span>
-                  {r.name}
+                <div 
+                  key={i} 
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    selectPickup(r);
+                  }}
+                  className="px-3.5 py-2.5 hover:bg-blue-50 dark:hover:bg-blue-900/30 cursor-pointer flex items-center gap-2.5 transition-colors group"
+                >
+                  <span className="text-gray-400 group-hover:text-blue-600 shrink-0">📍</span>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate group-hover:text-blue-600">
+                      {r.name}
+                    </p>
+                  </div>
                 </div>
               ))}
             </div>
           )}
         </div>
 
+        {/* Destination Location */}
         <div className="relative">
-          <div className="flex justify-between items-end mb-1">
-            <label className="block text-xs font-semibold text-gray-500 uppercase">Destination Location</label>
-            <button type="button" onClick={() => selectDest({ name: 'Rafic Hariri Airport (Demo)', lat: 33.821, lng: 35.488 })} className="text-[10px] text-blue-600 font-bold uppercase hover:underline">Insert Demo</button>
+          <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Destination Location</label>
+          <div className="relative">
+            <input 
+              type="text" 
+              value={destAddr} 
+              onChange={e => handleDestChange(e.target.value)} 
+              onFocus={() => { if (destResults.length > 0) setIsDestOpen(true) }}
+              onBlur={() => { setTimeout(() => setIsDestOpen(false), 180) }}
+              className="w-full pl-8 pr-8 py-2 border rounded-lg bg-gray-50 dark:bg-gray-950 dark:border-gray-700 text-sm focus:border-red-500 focus:bg-white dark:focus:bg-gray-900 outline-none transition-colors" 
+              placeholder="Search destination, city, or landmark..." 
+            />
+            <div className="absolute left-2.5 top-2.5 text-red-500 pointer-events-none">
+              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                <path fillRule="evenodd" d="M5.05 4.05a7 7 0 119.9 9.9L10 18.9l-4.95-4.95a7 7 0 010-9.9zM10 11a2 2 0 100-4 2 2 0 000 4z" clipRule="evenodd" />
+              </svg>
+            </div>
+            {isSearchingDest && (
+              <div className="absolute right-3 top-2.5">
+                <div className="w-4 h-4 border-2 border-red-500 border-t-transparent rounded-full animate-spin"></div>
+              </div>
+            )}
           </div>
-          <input type="text" value={destAddr} onChange={e => handleDestSearch(e.target.value)} className="w-full px-3 py-2 border rounded-lg bg-gray-50 dark:bg-gray-950 dark:border-gray-700 text-sm focus:border-red-500 outline-none" placeholder="Type to search (e.g. Airport)" />
-          {destResults.length > 0 && (
-            <div className="absolute z-50 w-full mt-1 bg-white dark:bg-gray-800 border rounded shadow-lg max-h-40 overflow-y-auto">
+          
+          {isDestOpen && destResults.length > 0 && (
+            <div className="absolute z-50 w-full mt-1 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-xl shadow-xl max-h-56 overflow-y-auto divide-y divide-gray-100 dark:divide-gray-800">
               {destResults.map((r, i) => (
-                <div key={i} onClick={() => selectDest(r)} className="px-3 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer border-b last:border-0 dark:border-gray-700">
-                  <span className={`text-[9px] px-1 mr-2 rounded uppercase font-bold text-white ${r.source === 'local' ? 'bg-purple-500' : 'bg-gray-500'}`}>{r.source}</span>
-                  {r.name}
+                <div 
+                  key={i} 
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    selectDest(r);
+                  }}
+                  className="px-3.5 py-2.5 hover:bg-blue-50 dark:hover:bg-blue-900/30 cursor-pointer flex items-center gap-2.5 transition-colors group"
+                >
+                  <span className="text-gray-400 group-hover:text-blue-600 shrink-0">📍</span>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate group-hover:text-blue-600">
+                      {r.name}
+                    </p>
+                  </div>
                 </div>
               ))}
             </div>
@@ -343,8 +528,8 @@ export default function OrderEntryForm({ initialOrder = null, onSaved, onRouteUp
           <div>
             <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Vehicle Type</label>
             <select value={vehicleType} onChange={e => setVehicleType(e.target.value)} className="w-full px-3 py-2 border rounded-lg bg-gray-50 dark:bg-gray-950 dark:border-gray-700 text-sm focus:border-blue-500 outline-none">
-              {Array.from(new Set([...rules.map(r => r.vehicle_type), 'sedan', 'suv/van'])).map(vt => (
-                <option key={vt as string} value={vt as string}>{(vt as string).charAt(0).toUpperCase() + (vt as string).slice(1)}</option>
+              {Array.from(new Set(['sedan', 'suv', ...rules.map(r => r.vehicle_type)])).map(vt => (
+                <option key={vt as string} value={vt as string}>{(vt as string).toUpperCase()}</option>
               ))}
             </select>
           </div>
@@ -363,14 +548,42 @@ export default function OrderEntryForm({ initialOrder = null, onSaved, onRouteUp
             </select>
           </div>
         </div>
+
+        {/* Estimated Trip Duration & Distance Banner */}
+        {isCalculatingRoute ? (
+          <div className="bg-blue-50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-900/40 rounded-xl p-3 flex items-center gap-2.5 animate-pulse">
+            <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+            <span className="text-xs font-semibold text-blue-700 dark:text-blue-300">Calculating driving route & trip duration...</span>
+          </div>
+        ) : etaMins > 0 ? (
+          <div className="bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-950/30 dark:to-indigo-950/30 border border-blue-200 dark:border-blue-800 rounded-xl p-3.5 flex items-center justify-between shadow-sm">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-blue-600 text-white flex items-center justify-center font-bold text-lg shadow-sm">
+                ⏱️
+              </div>
+              <div>
+                <div className="text-[10px] uppercase font-bold tracking-wider text-blue-600 dark:text-blue-400">
+                  Estimated Trip Duration (Passenger Ride)
+                </div>
+                <div className="text-lg font-black text-gray-900 dark:text-white">
+                  {etaMins} mins <span className="text-xs font-medium text-gray-500">({distanceKm.toFixed(1)} km)</span>
+                </div>
+              </div>
+            </div>
+            <div className="text-right">
+              <span className="text-[10px] uppercase font-bold text-gray-400 block">Route Status</span>
+              <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400">Direct Route</span>
+            </div>
+          </div>
+        ) : null}
       </div>
 
       {/* Pricing Module */}
       {distanceKm > 0 && (
         <div className="bg-gray-50 dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-lg p-4 space-y-3">
           <div className="flex justify-between items-center text-sm">
-            <span className="text-gray-500">Route Info</span>
-            <span className="font-bold">{distanceKm.toFixed(1)} km • {etaMins} mins</span>
+            <span className="text-gray-500">Trip Driving Time & Distance</span>
+            <span className="font-bold text-gray-900 dark:text-white">{etaMins} mins • {distanceKm.toFixed(1)} km</span>
           </div>
           <div className="flex justify-between items-center text-sm">
             <span className="text-gray-500">Auto-Calculated Fare</span>
@@ -403,18 +616,52 @@ export default function OrderEntryForm({ initialOrder = null, onSaved, onRouteUp
         />
 
         {recommendedDrivers.length > 0 ? (
-          <div className="space-y-2 max-h-40 overflow-y-auto">
+          <div className="space-y-2 max-h-48 overflow-y-auto">
             {recommendedDrivers.map(d => (
               <div
                 key={d.id}
-                onClick={() => setAssignedDriverId(d.id)}
-                className={`p-2 rounded border cursor-pointer flex justify-between items-center text-sm transition-colors ${assignedDriverId === d.id ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/30' : 'border-gray-200 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/50'}`}
+                onClick={() => {
+                  setAssignedDriverId(d.id)
+                  onDriverSelect?.(d.id)
+                }}
+                className={`p-2.5 rounded-lg border cursor-pointer flex justify-between items-center text-sm transition-all ${
+                  assignedDriverId === d.id
+                    ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/30 ring-1 ring-blue-500 shadow-sm'
+                    : 'border-gray-200 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/50'
+                }`}
               >
                 <div>
-                  <div className="font-bold text-gray-900 dark:text-white">{d.name}</div>
-                  <div className="text-[10px] text-gray-500 uppercase bg-gray-100 dark:bg-gray-800 px-1 rounded inline-block mt-0.5">{d.category}</div>
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className="font-bold text-gray-900 dark:text-white">{d.name}</span>
+                    <span className="text-[10px] uppercase font-bold text-gray-600 dark:text-gray-300 bg-gray-100 dark:bg-gray-800 px-1.5 py-0.5 rounded">
+                      {d.vehicleType}
+                    </span>
+                    <span className="text-[9px] uppercase font-bold text-emerald-700 dark:text-emerald-400 bg-emerald-100 dark:bg-emerald-900/30 px-1.5 py-0.5 rounded flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                      Available
+                    </span>
+                    {d.isExactMatch ? (
+                      <span className="text-[9px] uppercase font-bold text-blue-700 dark:text-blue-400 bg-blue-100 dark:bg-blue-900/30 px-1.5 py-0.5 rounded">
+                        Exact Match
+                      </span>
+                    ) : (
+                      <span className="text-[9px] uppercase font-bold text-amber-700 dark:text-amber-400 bg-amber-100 dark:bg-amber-900/30 px-1.5 py-0.5 rounded">
+                        Alt Class
+                      </span>
+                    )}
+                    {d.phone && (
+                      <WhatsAppButton
+                        phone={d.phone}
+                        driverName={d.name}
+                        message={d.secure_access_token ? `Hello ${d.name}, your driver portal link is:\nhttps://taxi-erp.vercel.app/driver-portal/${d.secure_access_token}` : undefined}
+                        variant="badge"
+                        label="WhatsApp"
+                      />
+                    )}
+                  </div>
+                  <div className="text-[10px] text-gray-500 mt-0.5">{d.category}</div>
                 </div>
-                <div className="text-right">
+                <div className="text-right shrink-0">
                   <div className="font-bold text-blue-600 dark:text-blue-400">{d.etaMins} mins ETA</div>
                   <div className="text-xs text-gray-400">{d.distanceKm} km away</div>
                 </div>
@@ -423,7 +670,32 @@ export default function OrderEntryForm({ initialOrder = null, onSaved, onRouteUp
           </div>
         ) : (
           <div className="text-sm text-gray-500 italic p-3 bg-gray-50 dark:bg-gray-950 rounded border border-gray-200 dark:border-gray-800">
-            {pickupLat ? 'No drivers currently available nearby. Use the text box above to force assign.' : 'Select pickup location to see nearby drivers. Or use text box to force assign.'}
+            {pickupLat ? 'No drivers currently available nearby. Use the text box above to force assign.' : 'Select pickup location to see nearby drivers. Or click on the map.'}
+          </div>
+        )}
+
+        {/* Quick WhatsApp contact for the currently assigned driver */}
+        {assignedDriver && assignedDriver.phone && (
+          <div className="flex items-center justify-between p-2.5 bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 rounded-xl mt-2 transition-all shadow-sm">
+            <div className="flex items-center gap-2 min-w-0 pr-2">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0 animate-pulse"></span>
+              <div className="min-w-0">
+                <div className="text-xs font-bold text-emerald-900 dark:text-emerald-200 truncate">
+                  Assigned: {assignedDriver.name || assignedDriver.full_name}
+                </div>
+                <div className="text-[10px] text-emerald-700/80 dark:text-emerald-400/80 truncate">
+                  {assignedDriver.phone}
+                </div>
+              </div>
+            </div>
+            <WhatsAppButton
+              phone={assignedDriver.phone}
+              driverName={assignedDriver.name || assignedDriver.full_name}
+              message={`Order #${initialOrder?.order_number || 'New Ride'}: Pickup at ${pickupAddr || 'Pickup point'}${destAddr ? ` to ${destAddr}` : ''}${assignedDriver.secure_access_token ? `\nDriver Portal:\nhttps://taxi-erp.vercel.app/driver-portal/${assignedDriver.secure_access_token}` : ''}`}
+              variant="button"
+              label="Chat on WhatsApp"
+              className="shrink-0"
+            />
           </div>
         )}
       </div>

@@ -7,6 +7,13 @@ function getSupabase() {
   return createClient(supabaseUrl, supabaseKey);
 }
 
+function normalizeVehicleType(type?: string | null): string {
+  if (!type) return 'sedan';
+  const clean = type.toLowerCase().trim();
+  if (clean === 'suv/van' || clean === 'suv' || clean === 'van') return 'suv';
+  return clean;
+}
+
 export async function getNearestDrivers(pickupLat: number, pickupLng: number, requestedVehicleType: string) {
   // Fetch active available drivers
   const { data: drivers, error } = await getSupabase()
@@ -20,14 +27,10 @@ export async function getNearestDrivers(pickupLat: number, pickupLng: number, re
     return [];
   }
 
-  // Filter by requested vehicle type (if strict)
-  const compatibleDrivers = drivers.filter(d => 
-    requestedVehicleType === 'any' || d.vehicle_type === requestedVehicleType
-  );
-
+  const normalizedRequested = normalizeVehicleType(requestedVehicleType);
   const rankedDrivers = [];
 
-  for (const driver of compatibleDrivers) {
+  for (const driver of drivers) {
     if (driver.current_lat && driver.current_lng) {
       // Optimization: If Haversine distance is > 50km, skip expensive routing API call
       const roughDist = getHaversineDistance(pickupLat, pickupLng, driver.current_lat, driver.current_lng);
@@ -42,18 +45,28 @@ export async function getNearestDrivers(pickupLat: number, pickupLng: number, re
         etaMins = route.durationMinutes;
       }
 
+      const driverNormalizedType = normalizeVehicleType(driver.vehicle_type);
+      const isExactMatch = requestedVehicleType === 'any' || driverNormalizedType === normalizedRequested;
+
       rankedDrivers.push({
         id: driver.id,
         name: driver.full_name,
-        category: driver.driver_categories?.name || 'Unknown',
-        vehicleType: driver.vehicle_type,
+        category: driver.driver_categories?.name || 'Driver',
+        vehicleType: driver.vehicle_type || 'sedan',
         distanceKm: Number(distanceKm.toFixed(2)),
         etaMins,
-        phone: driver.phone
+        phone: driver.phone,
+        secure_access_token: driver.secure_access_token,
+        isExactMatch
       });
     }
   }
 
-  // Sort by ETA ascending
-  return rankedDrivers.sort((a, b) => a.etaMins - b.etaMins);
+  // Sort: Exact vehicle matches first, then nearest ETA ascending
+  return rankedDrivers.sort((a, b) => {
+    if (a.isExactMatch && !b.isExactMatch) return -1;
+    if (!a.isExactMatch && b.isExactMatch) return 1;
+    return a.etaMins - b.etaMins;
+  });
 }
+

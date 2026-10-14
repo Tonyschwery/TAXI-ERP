@@ -169,7 +169,11 @@ If the customer already confirmed ("yes", "from my location", "from here", "zouk
 
   // 9. Init Gemini & App URL
   const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY })
-  const appUrl = (process.env.NEXT_PUBLIC_APP_URL || 'https://taxi-erp.vercel.app').replace(/\/$/, '')
+  // Customer links sent via WhatsApp must ALWAYS point to the live hosted production URL
+  const appUrl = (process.env.NEXT_PUBLIC_APP_URL && !process.env.NEXT_PUBLIC_APP_URL.includes('localhost')
+    ? process.env.NEXT_PUBLIC_APP_URL
+    : 'https://taxi-erp.vercel.app'
+  ).replace(/\/$/, '')
 
   // 10. System Prompt
   const systemPrompt = `You are an expert AI Taxi Dispatch Operator in Lebanon.

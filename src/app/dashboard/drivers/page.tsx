@@ -39,8 +39,11 @@ export default async function DriversPage() {
     .eq('is_active', true)
     .order('plate_number')
 
-  // Get APP_URL from env or fallback to production URL
-  const appUrl = (process.env.NEXT_PUBLIC_APP_URL || 'https://taxi-erp.vercel.app').replace(/\/$/, '')
+  // Get APP_URL from env or fallback to live production URL (never localhost)
+  const appUrl = (process.env.NEXT_PUBLIC_APP_URL && !process.env.NEXT_PUBLIC_APP_URL.includes('localhost')
+    ? process.env.NEXT_PUBLIC_APP_URL
+    : 'https://taxi-erp.vercel.app'
+  ).replace(/\/$/, '')
 
   return (
     <div className="max-w-7xl mx-auto space-y-8">
@@ -48,8 +51,8 @@ export default async function DriversPage() {
         <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Driver Management</h1>
         <p className="text-gray-500 dark:text-gray-400 mt-1">Manage driver profiles, assign vehicles, and generate access portals.</p>
       </div>
-      <DriverManager 
-        initialDrivers={drivers || []} 
+      <DriverManager
+        initialDrivers={drivers || []}
         categories={categories || []}
         vehicles={vehicles || []}
         appUrl={appUrl}

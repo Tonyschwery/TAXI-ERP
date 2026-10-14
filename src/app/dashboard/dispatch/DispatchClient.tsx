@@ -1,11 +1,14 @@
 'use client'
 
-import { useEffect, useState, useMemo } from 'react'
+import { useEffect, useState, useMemo, useRef, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import dynamic from 'next/dynamic'
 import OrderEntryForm from '@/components/dispatch/OrderEntryForm'
+import ResizeHandle from '@/components/dispatch/ResizeHandle'
+import MapErrorBoundary from '@/components/maps/MapErrorBoundary'
 
 import { reverseGeocodeLocation } from '@/components/dispatch/actions'
+import WhatsAppButton from '@/components/ui/WhatsAppButton'
 
 // Dynamically import map to avoid SSR window is not defined errors
 const LiveDispatchMap = dynamic(() => import('@/components/maps/LiveDispatchMap'), { 
@@ -33,10 +36,10 @@ function DriverReadinessCard({ driver, onClick }: { driver: any, onClick: () => 
       onClick={onClick}
       className="p-3 bg-gray-50 dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-xl flex justify-between items-center cursor-pointer hover:border-blue-500 hover:shadow-md transition-all group"
     >
-      <div>
+      <div className="min-w-0 pr-2">
         <div className="flex items-center gap-2">
           <div className="font-bold text-gray-900 dark:text-white text-sm group-hover:text-blue-600 transition-colors">{driver.driver_code}</div>
-          <div className="text-[10px] text-gray-500 bg-gray-200 dark:bg-gray-800 px-1.5 py-0.5 rounded">{driver.full_name}</div>
+          <div className="text-[10px] text-gray-500 bg-gray-200 dark:bg-gray-800 px-1.5 py-0.5 rounded truncate max-w-[120px]">{driver.full_name}</div>
         </div>
         <div className="text-xs text-gray-500 mt-1 flex items-center gap-1">
           <svg className="w-3 h-3 text-gray-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
@@ -48,10 +51,28 @@ function DriverReadinessCard({ driver, onClick }: { driver: any, onClick: () => 
           </div>
         )}
       </div>
-      <div className="w-3 h-3 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)] animate-pulse shrink-0"></div>
+      <div className="flex items-center gap-2 shrink-0">
+        <WhatsAppButton
+          phone={driver.phone}
+          driverName={driver.full_name}
+          variant="icon"
+        />
+        <div className="w-3 h-3 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)] animate-pulse"></div>
+      </div>
     </div>
   )
 }
+
+// ---- Resizable layout settings (saved per browser) ----
+const LAYOUT_LEFT_KEY = 'dispatch.layout.leftPct'
+const LAYOUT_FLEET_KEY = 'dispatch.layout.fleetHeight'
+const DEFAULT_LEFT_PCT = 33.33
+const DEFAULT_FLEET_HEIGHT = 192
+const MIN_LEFT_PCT = 20
+const MAX_LEFT_PCT = 65
+const MIN_FLEET_HEIGHT = 56   // header only
+const MIN_MAP_HEIGHT = 220
+const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v))
 
 export default function DispatchClient({ initialOrders = [], initialDrivers = [] }: { initialOrders: any[], initialDrivers: any[] }) {
   const [orders, setOrders] = useState<any[]>(initialOrders)
@@ -61,6 +82,70 @@ export default function DispatchClient({ initialOrders = [], initialDrivers = []
   const [activeTab, setActiveTab] = useState<'drafts' | 'pending' | 'active' | 'completed'>('pending')
   const [selectedOrder, setSelectedOrder] = useState<any>(null)
   const [isOrderFormOpen, setIsOrderFormOpen] = useState(false)
+  // Minimized = form stays mounted (nothing typed is lost) but the order queue is shown
+  const [isFormMinimized, setIsFormMinimized] = useState(false)
+  // Bumped every time a fresh form is opened so it always starts clean
+  const [formInstance, setFormInstance] = useState(0)
+
+  // Driver selected from clicking map marker or fleet readiness card
+  const [selectedDriverForForm, setSelectedDriverForForm] = useState<string | null>(null)
+  // Coordinates picked directly by clicking the map
+  const [mapClickCoords, setMapClickCoords] = useState<[number, number] | null>(null)
+
+  // Map route metrics (distance & driving time for the HUD)
+  const [routeDistance, setRouteDistance] = useState<number | undefined>(undefined)
+  const [routeDuration, setRouteDuration] = useState<number | undefined>(undefined)
+
+  // Resizable panel sizes
+  const [leftPct, setLeftPct] = useState(DEFAULT_LEFT_PCT)
+  const [fleetHeight, setFleetHeight] = useState(DEFAULT_FLEET_HEIGHT)
+  const splitContainerRef = useRef<HTMLDivElement>(null)
+  const rightColumnRef = useRef<HTMLDivElement>(null)
+  const dragRef = useRef({ start: 0, size: 0, value: 0 })
+
+  // Restore saved panel sizes after mount (avoids SSR hydration mismatch)
+  useEffect(() => {
+    try {
+      const savedLeft = parseFloat(window.localStorage.getItem(LAYOUT_LEFT_KEY) || '')
+      const savedFleet = parseFloat(window.localStorage.getItem(LAYOUT_FLEET_KEY) || '')
+      if (!Number.isNaN(savedLeft)) setLeftPct(clamp(savedLeft, MIN_LEFT_PCT, MAX_LEFT_PCT))
+      if (!Number.isNaN(savedFleet)) setFleetHeight(Math.max(MIN_FLEET_HEIGHT, savedFleet))
+    } catch {}
+  }, [])
+
+  const saveLayout = (key: string, value: number) => {
+    try { window.localStorage.setItem(key, String(value)) } catch {}
+  }
+
+  // Horizontal split: order column <-> map column
+  const leftResize = {
+    onResizeStart: () => {
+      dragRef.current = { start: leftPct, size: splitContainerRef.current?.getBoundingClientRect().width || 1, value: leftPct }
+    },
+    onResize: (delta: number) => {
+      const next = clamp(dragRef.current.start + (delta / dragRef.current.size) * 100, MIN_LEFT_PCT, MAX_LEFT_PCT)
+      dragRef.current.value = next
+      setLeftPct(next)
+    },
+    onResizeEnd: () => saveLayout(LAYOUT_LEFT_KEY, dragRef.current.value),
+    onReset: () => { setLeftPct(DEFAULT_LEFT_PCT); saveLayout(LAYOUT_LEFT_KEY, DEFAULT_LEFT_PCT) },
+  }
+
+  // Vertical split: map <-> fleet readiness panel
+  const fleetResize = {
+    onResizeStart: () => {
+      dragRef.current = { start: fleetHeight, size: rightColumnRef.current?.getBoundingClientRect().height || 0, value: fleetHeight }
+    },
+    onResize: (delta: number) => {
+      const maxFleet = Math.max(MIN_FLEET_HEIGHT, dragRef.current.size - MIN_MAP_HEIGHT - 16)
+      // Dragging the divider down grows the map and shrinks the fleet panel
+      const next = clamp(dragRef.current.start - delta, MIN_FLEET_HEIGHT, maxFleet)
+      dragRef.current.value = next
+      setFleetHeight(next)
+    },
+    onResizeEnd: () => saveLayout(LAYOUT_FLEET_KEY, dragRef.current.value),
+    onReset: () => { setFleetHeight(DEFAULT_FLEET_HEIGHT); saveLayout(LAYOUT_FLEET_KEY, DEFAULT_FLEET_HEIGHT) },
+  }
 
   // Map state
   const [mapPickup, setMapPickup] = useState<[number, number] | null>(null)
@@ -143,13 +228,28 @@ export default function DispatchClient({ initialOrders = [], initialDrivers = []
       categoryName: d.driver_categories?.name || 'Driver',
       availability: d.availability as any,
       lat: d.current_lat,
-      lng: d.current_lng
+      lng: d.current_lng,
+      phone: d.phone,
+      secure_access_token: d.secure_access_token
     }))
   }, [drivers])
 
+  // Opening another order while one is minimized would discard what was typed — ask first
+  const confirmDiscardMinimizedForm = () => {
+    if (!isOrderFormOpen) return true
+    return window.confirm('An order is still in progress (minimized). Discard it and continue?')
+  }
+
   const openOrder = (order: any) => {
+    if (!confirmDiscardMinimizedForm()) return
     setSelectedOrder(order)
+    setSelectedDriverForForm(order.assigned_driver_id || null)
+    setMapClickCoords(null)
+    setRouteDistance(order.distance_km || undefined)
+    setRouteDuration(order.estimated_duration_min || undefined)
+    setFormInstance(n => n + 1)
     setIsOrderFormOpen(true)
+    setIsFormMinimized(false)
     if (order.pickup_lat) setMapPickup([order.pickup_lat, order.pickup_lng])
     if (order.destination_lat) setMapDest([order.destination_lat, order.destination_lng])
     if (order.encoded_polyline) setMapRoute(order.encoded_polyline)
@@ -157,17 +257,60 @@ export default function DispatchClient({ initialOrders = [], initialDrivers = []
   }
 
   const handleNewOrder = () => {
+    if (!confirmDiscardMinimizedForm()) return
     setSelectedOrder(null)
+    setSelectedDriverForForm(null)
+    setMapClickCoords(null)
+    setRouteDistance(undefined)
+    setRouteDuration(undefined)
+    setFormInstance(n => n + 1)
     setIsOrderFormOpen(true)
+    setIsFormMinimized(false)
     setMapPickup(null)
     setMapDest(null)
     setMapRoute(null)
     setFocusedMapLocation(null)
   }
 
+  const closeOrderForm = () => {
+    setIsOrderFormOpen(false)
+    setIsFormMinimized(false)
+    setSelectedDriverForForm(null)
+    setMapClickCoords(null)
+    setRouteDistance(undefined)
+    setRouteDuration(undefined)
+  }
+
+  // Must be a stable reference: OrderEntryForm lists it as an effect dependency, so a new
+  // function on every render would re-fetch the route (and reset the fare) over and over.
+  const handleRouteUpdate = useCallback((
+    pickup: [number, number] | null,
+    dest: [number, number] | null,
+    route: string | null,
+    distance?: number,
+    duration?: number
+  ) => {
+    setMapPickup(pickup)
+    setMapDest(dest)
+    setMapRoute(route)
+    setRouteDistance(distance)
+    setRouteDuration(duration)
+  }, [])
+
+  // Allow clicking on the map while an order is being entered to set the pickup pin
+  const handleMapClick = useCallback((lat: number, lng: number) => {
+    if (isOrderFormOpen) {
+      setMapClickCoords([lat, lng])
+      setMapPickup([lat, lng])
+    }
+  }, [isOrderFormOpen])
+
   const handleDriverCardClick = (d: any) => {
     if (d.current_lat && d.current_lng) {
       setFocusedMapLocation([d.current_lat, d.current_lng])
+    }
+    if (isOrderFormOpen) {
+      setSelectedDriverForForm(d.id)
     }
   }
 
@@ -245,58 +388,130 @@ export default function DispatchClient({ initialOrders = [], initialDrivers = []
         </div>
       </div>
 
-      {/* Split Layout */}
-      <div className="flex-1 flex gap-4 min-h-0">
+      {/* Split Layout (resizable) */}
+      <div ref={splitContainerRef} className="flex-1 flex min-h-0">
         
-        {/* Left Column: Kanban / List */}
-        <div className="w-1/3 flex flex-col bg-gray-50 dark:bg-gray-950 rounded-xl border border-gray-200 dark:border-gray-800 overflow-hidden">
-          <div className="flex bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 text-sm font-medium">
-            <button onClick={() => setActiveTab('drafts')} className={`flex-1 py-3 text-center transition-colors ${activeTab === 'drafts' ? 'border-b-2 border-purple-500 text-purple-600 dark:text-purple-400' : 'text-gray-500 hover:bg-gray-50 dark:hover:bg-gray-800'}`}>Drafts ({drafts.length})</button>
-            <button onClick={() => setActiveTab('pending')} className={`flex-1 py-3 text-center transition-colors ${activeTab === 'pending' ? 'border-b-2 border-yellow-500 text-yellow-600 dark:text-yellow-400' : 'text-gray-500 hover:bg-gray-50 dark:hover:bg-gray-800'}`}>Pending ({pending.length})</button>
-            <button onClick={() => setActiveTab('active')} className={`flex-1 py-3 text-center transition-colors ${activeTab === 'active' ? 'border-b-2 border-blue-500 text-blue-600 dark:text-blue-400' : 'text-gray-500 hover:bg-gray-50 dark:hover:bg-gray-800'}`}>Active ({activeTrips.length})</button>
-          </div>
-          
-          <div className="flex-1 overflow-y-auto p-4 space-y-3">
-            <button onClick={handleNewOrder} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-xl shadow-sm transition-colors mb-2">
-              + Create New Order
-            </button>
-            {activeOrdersList.map(renderOrderCard)}
-            {activeOrdersList.length === 0 && (
-              <div className="text-center text-gray-500 italic mt-10">No orders in this queue.</div>
+        {/* Left Column: Order Entry (docked) or Kanban / List */}
+        <div
+          className="shrink-0 flex flex-col bg-gray-50 dark:bg-gray-950 rounded-xl border border-gray-200 dark:border-gray-800 overflow-hidden"
+          style={{ width: `${leftPct}%`, minWidth: isOrderFormOpen && !isFormMinimized ? 400 : 280 }}
+        >
+
+          {/* Docked Order Entry — the map stays visible & interactive next to it */}
+          {isOrderFormOpen && (
+            <div className={isFormMinimized ? 'hidden' : 'flex flex-col h-full min-h-0'}>
+              <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-800 flex justify-between items-center bg-white dark:bg-gray-900">
+                <h2 className="font-bold text-gray-900 dark:text-white">Order Entry</h2>
+                <div className="flex items-center gap-1">
+                  <button
+                    id="order-form-minimize"
+                    type="button"
+                    onClick={() => setIsFormMinimized(true)}
+                    title="Minimize — keeps what you typed and shows the order queue"
+                    className="px-2 py-1 text-xs font-semibold rounded-md text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+                  >
+                    &#8211; Minimize
+                  </button>
+                  <button
+                    id="order-form-close"
+                    type="button"
+                    onClick={closeOrderForm}
+                    title="Close"
+                    className="w-8 h-8 flex items-center justify-center rounded-md text-xl font-bold text-gray-500 hover:text-gray-900 hover:bg-gray-100 dark:hover:text-white dark:hover:bg-gray-800 transition-colors"
+                  >
+                    &times;
+                  </button>
+                </div>
+              </div>
+              {/* Child overrides let the form fill the column instead of acting like a floating card */}
+              <div className="flex-1 overflow-y-auto p-3 [&>div]:max-h-none [&>div]:max-w-none [&>div]:shadow-none">
+                <OrderEntryForm 
+                  key={formInstance}
+                  initialOrder={selectedOrder} 
+                  externalPickup={mapClickCoords}
+                  selectedDriverId={selectedDriverForForm}
+                  onDriverSelect={setSelectedDriverForForm}
+                  allDrivers={drivers}
+                  onSaved={() => {
+                    closeOrderForm()
+                    // Realtime will update the list automatically!
+                  }} 
+                  onRouteUpdate={handleRouteUpdate}
+                />
+              </div>
+            </div>
+          )}
+
+          <div className={isOrderFormOpen && !isFormMinimized ? 'hidden' : 'flex flex-col h-full min-h-0'}>
+            {isOrderFormOpen && isFormMinimized && (
+              <button
+                id="order-form-resume"
+                type="button"
+                onClick={() => setIsFormMinimized(false)}
+                className="w-full flex items-center justify-between gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold transition-colors"
+              >
+                <span className="flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-white animate-pulse"></span>
+                  {selectedOrder ? `Order #${selectedOrder.order_number} in progress` : 'New order in progress'}
+                </span>
+                <span className="text-xs uppercase tracking-wide">Resume &rarr;</span>
+              </button>
             )}
+            <div className="flex bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 text-sm font-medium">
+              <button onClick={() => setActiveTab('drafts')} className={`flex-1 py-3 text-center transition-colors ${activeTab === 'drafts' ? 'border-b-2 border-purple-500 text-purple-600 dark:text-purple-400' : 'text-gray-500 hover:bg-gray-50 dark:hover:bg-gray-800'}`}>Drafts ({drafts.length})</button>
+              <button onClick={() => setActiveTab('pending')} className={`flex-1 py-3 text-center transition-colors ${activeTab === 'pending' ? 'border-b-2 border-yellow-500 text-yellow-600 dark:text-yellow-400' : 'text-gray-500 hover:bg-gray-50 dark:hover:bg-gray-800'}`}>Pending ({pending.length})</button>
+              <button onClick={() => setActiveTab('active')} className={`flex-1 py-3 text-center transition-colors ${activeTab === 'active' ? 'border-b-2 border-blue-500 text-blue-600 dark:text-blue-400' : 'text-gray-500 hover:bg-gray-50 dark:hover:bg-gray-800'}`}>Active ({activeTrips.length})</button>
+            </div>
+            
+            <div className="flex-1 overflow-y-auto p-4 space-y-3">
+              <button onClick={handleNewOrder} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-xl shadow-sm transition-colors mb-2">
+                + Create New Order
+              </button>
+              {activeOrdersList.map(renderOrderCard)}
+              {activeOrdersList.length === 0 && (
+                <div className="text-center text-gray-500 italic mt-10">No orders in this queue.</div>
+              )}
+            </div>
           </div>
         </div>
 
+        <ResizeHandle orientation="vertical" label="Resize order panel" {...leftResize} />
+
         {/* Right Column: Map & Available Drivers */}
-        <div className="w-2/3 flex flex-col gap-4">
-          <div className="flex-1">
-            <LiveDispatchMap 
-              drivers={driverMarkers}
-              pickup={mapPickup}
-              destination={mapDest}
-              encodedPolyline={mapRoute}
-              focusedLocation={focusedMapLocation}
-              onDriverClick={(id) => {
-                if (isOrderFormOpen) {
-                  alert("Click driver inside the Order Entry Form to assign.")
-                } else {
-                  // Pan to driver
+        <div ref={rightColumnRef} className="flex-1 min-w-0 flex flex-col">
+          <div className="flex-1 min-h-0">
+            <MapErrorBoundary>
+              <LiveDispatchMap 
+                drivers={driverMarkers}
+                pickup={mapPickup}
+                destination={mapDest}
+                encodedPolyline={mapRoute}
+                distanceKm={routeDistance}
+                durationMins={routeDuration}
+                focusedLocation={focusedMapLocation}
+                onMapClick={handleMapClick}
+                onDriverClick={(id) => {
                   const d = drivers.find(drv => drv.id === id)
                   if (d?.current_lat && d?.current_lng) {
                     setFocusedMapLocation([d.current_lat, d.current_lng])
                   }
-                }
-              }}
-            />
+                  if (isOrderFormOpen) {
+                    setSelectedDriverForForm(id)
+                  }
+                }}
+              />
+            </MapErrorBoundary>
           </div>
+
+          <ResizeHandle orientation="horizontal" label="Resize fleet panel" {...fleetResize} />
           
           {/* Compact Driver Readiness List */}
-          <div className="h-48 bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 p-4 flex flex-col shadow-sm">
+          <div className="shrink-0 bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 p-4 flex flex-col shadow-sm overflow-hidden" style={{ height: fleetHeight }}>
             <h3 className="font-bold text-gray-900 dark:text-white mb-3 text-sm flex justify-between items-center">
               Available Fleet Readiness
               <span className="text-xs font-normal text-gray-500 bg-gray-100 dark:bg-gray-800 px-2 py-0.5 rounded-full">{availableDrivers.length} Online</span>
             </h3>
-            <div className="flex-1 overflow-y-auto grid grid-cols-2 lg:grid-cols-3 gap-3 pr-2">
+            <div className="flex-1 min-h-0 overflow-y-auto grid grid-cols-2 lg:grid-cols-3 gap-3 pr-2 content-start">
               {availableDrivers.map(d => (
                 <DriverReadinessCard key={d.id} driver={d} onClick={() => handleDriverCardClick(d)} />
               ))}
@@ -306,32 +521,6 @@ export default function DispatchClient({ initialOrders = [], initialDrivers = []
 
         </div>
       </div>
-
-      {/* Slide-over Drawer for Order Entry */}
-      {isOrderFormOpen && (
-        <div className="fixed inset-0 z-50 flex justify-end bg-black/40">
-          <div className="w-full max-w-lg h-full bg-white dark:bg-gray-900 shadow-2xl flex flex-col transform transition-transform duration-300">
-            <div className="p-4 border-b border-gray-200 dark:border-gray-800 flex justify-between items-center bg-gray-50 dark:bg-gray-950">
-              <h2 className="font-bold text-gray-900 dark:text-white">Order Entry</h2>
-              <button onClick={() => setIsOrderFormOpen(false)} className="text-xl font-bold text-gray-500 hover:text-gray-900 dark:hover:text-white">&times;</button>
-            </div>
-            <div className="flex-1 overflow-y-auto">
-              <OrderEntryForm 
-                initialOrder={selectedOrder} 
-                onSaved={() => {
-                  setIsOrderFormOpen(false)
-                  // Realtime will update the list automatically!
-                }} 
-                onRouteUpdate={(pickup, dest, route) => {
-                  setMapPickup(pickup)
-                  setMapDest(dest)
-                  setMapRoute(route)
-                }}
-              />
-            </div>
-          </div>
-        </div>
-      )}
 
     </div>
   )
