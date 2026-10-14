@@ -20,12 +20,79 @@ export async function saveDriver(data: any) {
     throw new Error('Forbidden: Only Admins can modify drivers')
   }
 
+  // Check if driver category represents a company vehicle
+  const { data: cat } = await supabase
+    .from('driver_categories')
+    .select('is_company_vehicle_category, name')
+    .eq('id', data.category_id)
+    .single()
+
+  const isCompanyCar = cat?.is_company_vehicle_category === true
+
+  let assignedVehicleId = data.assigned_vehicle_id || null
+
+  if (isCompanyCar) {
+    const rawDetails = (data.private_vehicle_details || '').trim()
+    let makeModel = rawDetails || 'Company Car'
+    let plate = `CO-${data.driver_code || Math.floor(100 + Math.random() * 900)}`
+
+    if (rawDetails.includes('/')) {
+      const parts = rawDetails.split('/')
+      makeModel = parts[0]?.trim() || makeModel
+      plate = parts[1]?.trim() || plate
+    } else if (rawDetails.includes('-')) {
+      const parts = rawDetails.split('-')
+      makeModel = parts[0]?.trim() || makeModel
+      plate = parts[1]?.trim() || plate
+    }
+
+    if (assignedVehicleId) {
+      await supabase.from('vehicles').update({
+        plate_number: plate,
+        make_model: makeModel,
+        vehicle_type: data.vehicle_type || 'sedan',
+        is_company_owned: true,
+        is_active: data.is_active
+      }).eq('id', assignedVehicleId)
+    } else {
+      const { data: existingVeh } = await supabase
+        .from('vehicles')
+        .select('id')
+        .eq('plate_number', plate)
+        .maybeSingle()
+
+      if (existingVeh) {
+        assignedVehicleId = existingVeh.id
+        await supabase.from('vehicles').update({
+          make_model: makeModel,
+          vehicle_type: data.vehicle_type || 'sedan',
+          is_company_owned: true,
+          is_active: data.is_active
+        }).eq('id', existingVeh.id)
+      } else {
+        const { data: newVeh } = await supabase.from('vehicles').insert([{
+          plate_number: plate,
+          make_model: makeModel,
+          vehicle_type: data.vehicle_type || 'sedan',
+          is_company_owned: true,
+          is_active: data.is_active
+        }]).select().single()
+
+        if (newVeh) {
+          assignedVehicleId = newVeh.id
+        }
+      }
+    }
+  } else {
+    assignedVehicleId = null
+  }
+
   const payload = {
     driver_code: data.driver_code,
     full_name: data.full_name,
     phone: data.phone,
     category_id: data.category_id,
-    assigned_vehicle_id: data.assigned_vehicle_id || null,
+    assigned_vehicle_id: assignedVehicleId,
     private_vehicle_details: data.private_vehicle_details || null,
     vehicle_type: data.vehicle_type,
     custom_office_pct_override: data.custom_office_pct_override !== '' && data.custom_office_pct_override !== null 

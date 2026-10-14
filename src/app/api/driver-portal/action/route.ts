@@ -56,20 +56,60 @@ export async function POST(req: Request) {
       
       const updatePayload: any = { status }
       if (status === 'completed') {
-        updatePayload.final_fare = final_fare
-        updatePayload.payment_method_code = payment_method_code
-        if (extra_charges !== undefined) updatePayload.extra_charges = extra_charges
+        updatePayload.final_fare = Number(final_fare) || 0
+        updatePayload.payment_method_code = payment_method_code || 'cash'
+        if (extra_charges !== undefined) updatePayload.extra_charges = Number(extra_charges) || 0
+        updatePayload.completed_at = new Date().toISOString()
       } else if (status === 'cancelled') {
         updatePayload.operator_notes = cancel_reason ? `Driver Cancelled: ${cancel_reason}` : 'Driver Cancelled'
+        updatePayload.cancelled_at = new Date().toISOString()
       }
 
-      const { error } = await supabaseAdmin
+      const { data: updatedOrder, error } = await supabaseAdmin
         .from('orders')
         .update(updatePayload)
         .eq('id', orderId)
         .eq('assigned_driver_id', driver.id) // Security check
+        .select()
+        .single()
 
       if (error) throw error
+
+      if (status === 'completed') {
+        // Reset driver availability back to available
+        await supabaseAdmin.from('drivers').update({ availability: 'available' }).eq('id', driver.id)
+
+        // Insert into financial_transactions to record ledger impact
+        if (updatedOrder) {
+          const isCash = (updatedOrder.payment_method_code || payment_method_code) === 'cash'
+          const txAmount = isCash
+            ? Number(updatedOrder.office_share_amount || 0)
+            : Number(updatedOrder.driver_share_amount || 0)
+
+          const txType = isCash ? 'trip_commission_debt' : 'trip_payout_credit'
+          const balanceEffect = isCash ? -txAmount : txAmount
+          const desc = isCash
+            ? `Commission owed for Trip #${updatedOrder.order_number}`
+            : `Payout credit for Trip #${updatedOrder.order_number} (${updatedOrder.payment_method_code})`
+
+          if (txAmount > 0) {
+            await supabaseAdmin.from('financial_transactions').insert([{
+              transaction_date: new Date().toISOString(),
+              amount: txAmount,
+              transaction_type: txType,
+              driver_id: driver.id,
+              vehicle_id: updatedOrder.assigned_vehicle_id || null,
+              order_id: updatedOrder.id,
+              description: desc,
+              balance_effect_on_driver: balanceEffect,
+              payment_method_code: updatedOrder.payment_method_code || payment_method_code || 'cash'
+            }])
+          }
+        }
+      } else if (status === 'cancelled') {
+        await supabaseAdmin.from('drivers').update({ availability: 'available' }).eq('id', driver.id)
+      }
+
       await supabaseAdmin.from('activity_logs').insert([{
         entity_type: 'order',
         entity_id: orderId,

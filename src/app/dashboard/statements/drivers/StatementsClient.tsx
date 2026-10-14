@@ -89,13 +89,10 @@ export default function StatementsClient({ drivers }: { drivers: any[] }) {
 
   // Final Net Balance Payable/Receivable
   // The exact running balance at the END of this period
-  const periodTxEffect = transactions.reduce((sum, t) => sum + Number(t.balance_effect_on_driver), 0)
-  // But wait, orders ALSO affect the driver's true running balance. 
-  // In our schema, when an order is completed, did we insert a transaction?
-  // Let's assume order completion triggers a transaction, OR we must calculate it dynamically.
-  // Actually, if orders didn't create a `financial_transaction`, we must subtract `office_share_amount` from the balance.
-  // Wait, if an order is cash, driver owes office `office_share_amount` (Negative effect).
-  // If order is credit, office collected the cash, so office owes driver `driver_share` (Positive effect).
+  // Filter non-trip transactions (advances, cash settlements, expense reimbursements)
+  // because completed trip impacts are calculated directly from orders below:
+  const nonTripTransactions = transactions.filter(t => !['trip_commission_debt', 'trip_payout_credit'].includes(t.transaction_type))
+  const periodTxEffect = nonTripTransactions.reduce((sum, t) => sum + Number(t.balance_effect_on_driver), 0)
   
   let orderBalanceEffect = 0
   orders.forEach(o => {
@@ -108,14 +105,10 @@ export default function StatementsClient({ drivers }: { drivers: any[] }) {
     }
   })
 
-  // We should also factor in the opening balance of orders from the past if they weren't in financial_transactions.
-  // But for this statement, let's show the Period Net Change and the Final Balance (which ideally uses the same logic or assumes financial_transactions are the absolute source of truth).
-  // If `financial_transactions` doesn't automatically insert on order completion, then True Balance = `openingBalance` + `periodTxEffect` + `orderBalanceEffect` (and we'd need historical order effect too).
-  // Let's compute the period change:
+  // Period change from trips + financial settlements:
   const periodNetChange = periodTxEffect + orderBalanceEffect
   
-  // To get the absolute true balance, we really need the historical order balance effect too, 
-  // but let's just display the Period Net Change + Opening Balance (Tx) for the Statement.
+  // Total running balance at the end of period
   const finalBalance = openingBalance + periodNetChange
 
   // Prepare unified ledger table
@@ -130,7 +123,7 @@ export default function StatementsClient({ drivers }: { drivers: any[] }) {
       payment: o.payment_method_code,
       effect: o.payment_method_code === 'cash' ? -Number(o.office_share_amount) : (Number(o.final_fare) - Number(o.office_share_amount))
     })),
-    ...transactions.map(t => ({
+    ...nonTripTransactions.map(t => ({
       id: t.id,
       date: t.transaction_date,
       type: 'Tx',

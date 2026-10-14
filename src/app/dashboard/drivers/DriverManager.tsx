@@ -179,12 +179,10 @@ export default function DriverManager({
                         {d.driver_categories?.name}
                       </div>
                       <div className="text-xs text-gray-500">
-                        {d.assigned_vehicle_id ? (
-                          <span className="text-purple-600 dark:text-purple-400 font-medium">Co. Car: {d.vehicles?.plate_number}</span>
-                        ) : (
-                          <span>Private: {d.private_vehicle_details}</span>
-                        )}
-                        <span className="ml-2 uppercase bg-gray-200 dark:bg-gray-700 px-1 rounded">{d.vehicle_type}</span>
+                        {d.private_vehicle_details ? (
+                          <span>{d.private_vehicle_details} • </span>
+                        ) : null}
+                        <span className="uppercase bg-gray-200 dark:bg-gray-700 px-1.5 py-0.5 rounded font-bold text-[10px] text-gray-700 dark:text-gray-300">{d.vehicle_type}</span>
                       </div>
                     </td>
                     <td className="px-6 py-4">
@@ -287,19 +285,6 @@ export default function DriverManager({
 
               <div className="grid grid-cols-2 gap-4 pt-2 border-t border-gray-200 dark:border-gray-800 mt-2">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Assigned Company Vehicle</label>
-                  <select value={vehicleId} onChange={e => setVehicleId(e.target.value)} className="w-full px-4 py-2 bg-gray-50 dark:bg-gray-950 border border-gray-300 dark:border-gray-800 rounded-lg text-gray-900 dark:text-white focus:outline-none focus:border-blue-500">
-                    <option value="">None (Private Vehicle)</option>
-                    {vehicles.map(v => (
-                      <option key={v.id} value={v.id}>{v.plate_number} - {v.make_model}</option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Private Vehicle Details</label>
-                  <input type="text" value={privateCarDetails} onChange={e => setPrivateCarDetails(e.target.value)} disabled={!!vehicleId} className="w-full px-4 py-2 bg-gray-50 dark:bg-gray-950 border border-gray-300 dark:border-gray-800 rounded-lg text-gray-900 dark:text-white focus:outline-none focus:border-blue-500 disabled:opacity-50" placeholder={vehicleId ? "Using Company Car" : "e.g. Red Honda Civic"} />
-                </div>
-                <div>
                   <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Vehicle Type (For Pricing)</label>
                   <select required value={vehicleType} onChange={e => setVehicleType(e.target.value)} className="w-full px-4 py-2 bg-gray-50 dark:bg-gray-950 border border-gray-300 dark:border-gray-800 rounded-lg text-gray-900 dark:text-white focus:outline-none focus:border-blue-500">
                     <option value="sedan">Sedan</option>
@@ -308,7 +293,11 @@ export default function DriverManager({
                     <option value="vip">VIP</option>
                   </select>
                 </div>
-                <div className="flex items-center pt-6">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Vehicle Model & Plate Number</label>
+                  <input type="text" value={privateCarDetails} onChange={e => setPrivateCarDetails(e.target.value)} className="w-full px-4 py-2 bg-gray-50 dark:bg-gray-950 border border-gray-300 dark:border-gray-800 rounded-lg text-gray-900 dark:text-white focus:outline-none focus:border-blue-500" placeholder="e.g. White Toyota Camry / Plate 123456" />
+                </div>
+                <div className="flex items-center pt-2 col-span-2">
                   <input type="checkbox" id="isActive" checked={isActive} onChange={e => setIsActive(e.target.checked)} className="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500" />
                   <label htmlFor="isActive" className="ml-2 text-sm font-medium text-gray-700 dark:text-gray-300">Active Account</label>
                 </div>
@@ -316,7 +305,7 @@ export default function DriverManager({
 
               <div className="pt-2 border-t border-gray-200 dark:border-gray-800">
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Custom Office Commission % Override (Highest Priority)</label>
-                <p className="text-xs text-gray-500 mb-2">Leave blank to inherit from Vehicle or Category.</p>
+                <p className="text-xs text-gray-500 mb-2">Leave blank to inherit from Category.</p>
                 <input
                   type="number"
                   min="0"

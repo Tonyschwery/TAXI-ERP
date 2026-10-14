@@ -15,6 +15,7 @@ import {
 } from './actions'
 import { createClient } from '@/lib/supabase/client'
 import WhatsAppButton from '@/components/ui/WhatsAppButton'
+import ExtraChargesSelector from '@/components/dispatch/ExtraChargesSelector'
 
 interface OrderEntryFormProps {
   initialOrder?: any
@@ -589,10 +590,20 @@ export default function OrderEntryForm({
             <span className="text-gray-500">Auto-Calculated Fare</span>
             <span className="font-bold">${(calculatedFare || 0).toFixed(2)}</span>
           </div>
-          <div className="flex justify-between items-center text-sm">
-            <span className="text-gray-500">Extra Charges (Stops/Wait)</span>
-            <input type="number" step="0.1" value={Number.isNaN(extraCharges) ? '' : extraCharges} onChange={e => setExtraCharges(parseFloat(e.target.value) || 0)} className="w-20 px-2 py-1 border rounded bg-white dark:bg-gray-900 dark:border-gray-700 text-right text-sm" />
-          </div>
+          {(() => {
+            const activePricingRule = rules.find(r => r.vehicle_type === vehicleType) || rules[0]
+            return (
+              <ExtraChargesSelector
+                stopFee={activePricingRule?.extra_stop_fee || 3.0}
+                waitingFeePer15m={activePricingRule?.waiting_fee_per_15min || 2.5}
+                initialExtraCharges={extraCharges}
+                onChange={(total) => {
+                  setExtraCharges(total)
+                  setFinalFare(Number(((calculatedFare || 0) + total).toFixed(2)))
+                }}
+              />
+            )
+          })()}
           <div className="flex justify-between items-center text-base pt-2 border-t border-gray-200 dark:border-gray-800">
             <span className="font-bold text-gray-900 dark:text-white">Final Customer Fare</span>
             <input type="number" step="0.1" value={Number.isNaN(finalFare) ? '' : finalFare} onChange={e => setFinalFare(parseFloat(e.target.value) || 0)} className="w-24 px-2 py-1 border border-green-500 rounded bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-400 font-bold text-right text-base" />

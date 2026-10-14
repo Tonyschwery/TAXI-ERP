@@ -11,15 +11,39 @@ export default function ExpensesClient({ vehicles, drivers, userId }: { vehicles
   const [orders, setOrders] = useState<any[]>([])
   const [filterRange, setFilterRange] = useState('month') // day, week, month, custom
   const [filterVehicle, setFilterVehicle] = useState('all')
+
+  // Map company vehicles with their assigned drivers
+  const companyVehicles = vehicles.map(v => {
+    const linkedDriver = v.drivers?.[0] || drivers.find(d => d.assigned_vehicle_id === v.id)
+    return {
+      ...v,
+      driverId: linkedDriver?.id || null,
+      driverName: linkedDriver?.full_name || null,
+      driverCode: linkedDriver?.driver_code || null
+    }
+  })
   
   // Form State
-  const [formVehicle, setFormVehicle] = useState(vehicles[0]?.id || '')
-  const [formDriver, setFormDriver] = useState('')
+  const [formVehicle, setFormVehicle] = useState(companyVehicles[0]?.id || '')
+  const [formDriver, setFormDriver] = useState(companyVehicles[0]?.driverId || '')
   const [formCategory, setFormCategory] = useState('fuel')
   const [formAmount, setFormAmount] = useState('')
   const [formPaidBy, setFormPaidBy] = useState('office')
   const [formDate, setFormDate] = useState(new Date().toISOString().split('T')[0])
   const [formDesc, setFormDesc] = useState('')
+
+  useEffect(() => {
+    if (companyVehicles.length > 0 && !formVehicle) {
+      setFormVehicle(companyVehicles[0].id)
+      setFormDriver(companyVehicles[0].driverId || '')
+    }
+  }, [vehicles])
+
+  const handleVehicleChange = (vId: string) => {
+    setFormVehicle(vId)
+    const veh = companyVehicles.find(v => v.id === vId)
+    setFormDriver(veh?.driverId || '')
+  }
 
   const fetchData = async () => {
     // Determine date range
@@ -108,27 +132,41 @@ export default function ExpensesClient({ vehicles, drivers, userId }: { vehicles
   }
 
   // Filter vehicles to show stats for
-  const displayedVehicles = filterVehicle === 'all' ? vehicles : vehicles.filter(v => v.id === filterVehicle)
+  const displayedVehicles = filterVehicle === 'all' ? companyVehicles : companyVehicles.filter(v => v.id === filterVehicle)
 
   return (
     <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
       
       {/* Left: Input Form */}
       <div className="bg-white dark:bg-gray-900 rounded-2xl shadow p-6 border border-gray-100 dark:border-gray-800">
-        <h2 className="text-xl font-bold mb-4">Record Expense</h2>
+        <h2 className="text-xl font-bold mb-4">Record Company Vehicle Expense</h2>
         <form onSubmit={handleSubmit} className="space-y-4 text-sm">
           <div>
-            <label className="block text-gray-500 font-bold mb-1">Vehicle *</label>
-            <select value={formVehicle} onChange={e => setFormVehicle(e.target.value)} className="w-full border p-2 rounded bg-gray-50 dark:bg-black" required>
-              {vehicles.map(v => <option key={v.id} value={v.id}>{v.plate_number} ({v.make} {v.model})</option>)}
+            <label className="block text-gray-500 font-bold mb-1">Company Vehicle & Linked Driver *</label>
+            <select 
+              value={formVehicle} 
+              onChange={e => handleVehicleChange(e.target.value)} 
+              className="w-full border p-2.5 rounded-lg bg-gray-50 dark:bg-black font-semibold text-gray-900 dark:text-white" 
+              required
+            >
+              {companyVehicles.length === 0 ? (
+                <option value="" disabled>No company vehicles available</option>
+              ) : (
+                companyVehicles.map(v => (
+                  <option key={v.id} value={v.id}>
+                    {v.plate_number} • {v.make_model || v.vehicle_type} {v.driverName ? `(Driver: ${v.driverName})` : '(No Driver Assigned)'}
+                  </option>
+                ))
+              )}
             </select>
-          </div>
-          <div>
-            <label className="block text-gray-500 font-bold mb-1">Driver (Optional)</label>
-            <select value={formDriver} onChange={e => setFormDriver(e.target.value)} className="w-full border p-2 rounded bg-gray-50 dark:bg-black">
-              <option value="">-- None --</option>
-              {drivers.map(d => <option key={d.id} value={d.id}>{d.full_name}</option>)}
-            </select>
+            {formDriver ? (
+              <div className="mt-2 text-xs bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300 font-bold px-2.5 py-1.5 rounded-md flex items-center justify-between border border-blue-200 dark:border-blue-900/50">
+                <span>Driver Linked:</span>
+                <span>{companyVehicles.find(v => v.id === formVehicle)?.driverName}</span>
+              </div>
+            ) : (
+              <div className="mt-1 text-xs text-gray-400 italic">No driver currently assigned to this vehicle</div>
+            )}
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div>
@@ -187,10 +225,14 @@ export default function ExpensesClient({ vehicles, drivers, userId }: { vehicles
             </select>
           </div>
           <div>
-            <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Vehicle</label>
+            <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Company Vehicle</label>
             <select value={filterVehicle} onChange={e => setFilterVehicle(e.target.value)} className="border p-2 rounded bg-gray-50 dark:bg-black font-bold">
-              <option value="all">All Vehicles</option>
-              {vehicles.map(v => <option key={v.id} value={v.id}>{v.plate_number}</option>)}
+              <option value="all">All Company Vehicles ({companyVehicles.length})</option>
+              {companyVehicles.map(v => (
+                <option key={v.id} value={v.id}>
+                  {v.plate_number} • {v.make_model || v.vehicle_type} {v.driverName ? `(Driver: ${v.driverName})` : ''}
+                </option>
+              ))}
             </select>
           </div>
         </div>
@@ -203,7 +245,14 @@ export default function ExpensesClient({ vehicles, drivers, userId }: { vehicles
 
             return (
               <div key={v.id} className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-4 shadow-sm relative overflow-hidden">
-                <div className="font-black text-lg mb-2">{v.plate_number} <span className="text-gray-500 font-normal text-sm">({v.make})</span></div>
+                <div className="font-black text-lg">
+                  {v.plate_number} <span className="text-gray-500 font-normal text-sm">({v.make_model || v.vehicle_type || 'Sedan'})</span>
+                </div>
+                {v.driverName && (
+                  <div className="text-xs font-bold text-blue-600 dark:text-blue-400 mb-2">
+                    Driver: {v.driverName}
+                  </div>
+                )}
                 <div className="space-y-1 text-sm font-semibold">
                   <div className="flex justify-between"><span className="text-gray-500">Gross Revenue</span> <span className="text-green-600">${stats.revenue.toFixed(2)}</span></div>
                   <div className="flex justify-between"><span className="text-gray-500">Driver % Share</span> <span className="text-red-500">-${stats.driverShare.toFixed(2)}</span></div>
@@ -242,7 +291,8 @@ export default function ExpensesClient({ vehicles, drivers, userId }: { vehicles
             <thead className="bg-gray-50 dark:bg-black text-gray-500 uppercase text-xs">
               <tr>
                 <th className="p-3">Date</th>
-                <th className="p-3">Vehicle</th>
+                <th className="p-3">Company Vehicle</th>
+                <th className="p-3">Driver</th>
                 <th className="p-3">Category</th>
                 <th className="p-3">Description</th>
                 <th className="p-3">Amount</th>
@@ -250,11 +300,12 @@ export default function ExpensesClient({ vehicles, drivers, userId }: { vehicles
               </tr>
             </thead>
             <tbody>
-              {expenses.length === 0 && <tr><td colSpan={6} className="p-4 text-center text-gray-500">No expenses found for this period.</td></tr>}
+              {expenses.length === 0 && <tr><td colSpan={7} className="p-4 text-center text-gray-500">No expenses found for this period.</td></tr>}
               {expenses.map(exp => (
                 <tr key={exp.id} className="border-b dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/50">
                   <td className="p-3 whitespace-nowrap">{new Date(exp.expense_date).toLocaleDateString()}</td>
                   <td className="p-3 font-bold">{exp.vehicles?.plate_number}</td>
+                  <td className="p-3 text-xs font-semibold text-gray-600 dark:text-gray-300">{exp.drivers?.full_name || '—'}</td>
                   <td className="p-3 capitalize">{exp.expense_category}</td>
                   <td className="p-3">{exp.description}</td>
                   <td className="p-3 font-bold text-red-600">-${Number(exp.amount).toFixed(2)}</td>

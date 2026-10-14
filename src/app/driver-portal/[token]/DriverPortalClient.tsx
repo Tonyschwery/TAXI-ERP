@@ -2,19 +2,22 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import ExtraChargesSelector from '@/components/dispatch/ExtraChargesSelector'
 
 export default function DriverPortalClient({ 
   driver, 
   token,
   totalTrips,
   totalEarnings,
-  todayTrips
+  todayTrips,
+  pricingRules = []
 }: { 
   driver: any, 
   token: string,
   totalTrips: number,
   totalEarnings: number,
-  todayTrips: any[]
+  todayTrips: any[],
+  pricingRules?: any[]
 }) {
   const supabase = createClient()
   
@@ -22,6 +25,10 @@ export default function DriverPortalClient({
   const [isAvailable, setIsAvailable] = useState(driver.availability === 'available')
   const [activeOrder, setActiveOrder] = useState<any>(null)
   const [paymentMethods, setPaymentMethods] = useState<any[]>([])
+
+  const activeRule = pricingRules.find((r: any) => r.vehicle_type === (activeOrder?.vehicle_type_requested || driver.vehicle_type)) || pricingRules[0]
+  const stopFee = activeRule?.extra_stop_fee || 3.0
+  const waitingFee = activeRule?.waiting_fee_per_15min || 2.5
   
   // Modals
   const [showCompleteModal, setShowCompleteModal] = useState(false)
@@ -96,6 +103,8 @@ export default function DriverPortalClient({
       setActiveOrder(data || null)
       if (data) {
          setFinalFare(data.calculated_fare || 0)
+         setExtraCharges(data.extra_charges || 0)
+         if (data.payment_method_code) setPaymentCode(data.payment_method_code)
       }
     }
 
@@ -115,6 +124,8 @@ export default function DriverPortalClient({
            if (['assigned', 'accepted', 'on_the_way', 'arrived', 'picked_up'].includes(newOrder.status)) {
              setActiveOrder(newOrder)
              setFinalFare(newOrder.calculated_fare || 0)
+             setExtraCharges(newOrder.extra_charges || 0)
+             if (newOrder.payment_method_code) setPaymentCode(newOrder.payment_method_code)
              if (payload.eventType === 'UPDATE' && newOrder.status === 'assigned') {
                triggerAlert()
              }
@@ -545,8 +556,13 @@ export default function DriverPortalClient({
             </div>
 
             <div>
-              <label className="block text-xs font-bold text-gray-500 uppercase tracking-widest mb-2">Extra Stops / Wait Time</label>
-              <input type="number" value={extraCharges} onChange={e => setExtraCharges(parseFloat(e.target.value) || 0)} className="w-full text-2xl font-black bg-transparent border-b-4 border-gray-200 dark:border-gray-800 focus:border-green-500 outline-none pb-2" />
+              <ExtraChargesSelector
+                stopFee={stopFee}
+                waitingFeePer15m={waitingFee}
+                initialExtraCharges={extraCharges}
+                onChange={(total) => setExtraCharges(total)}
+                compact
+              />
             </div>
 
             <div className="bg-green-50 dark:bg-green-900/30 p-4 rounded-2xl border border-green-200 dark:border-green-800">

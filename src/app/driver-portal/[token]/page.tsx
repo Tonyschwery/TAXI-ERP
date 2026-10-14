@@ -33,6 +33,12 @@ export default async function DriverPortalPage({ params }: { params: Promise<{ t
   const totalTrips = completed.length
   const totalEarnings = completed.reduce((acc, trip) => acc + (trip.final_fare || 0), 0)
 
+  // 3. Fetch active pricing rules for stops and wait rates
+  const { data: pricingRules } = await supabaseAdmin
+    .from('pricing_rules')
+    .select('*')
+    .eq('is_active', true)
+
   return (
     <DriverPortalClient 
       driver={driver} 
@@ -40,6 +46,7 @@ export default async function DriverPortalPage({ params }: { params: Promise<{ t
       totalTrips={totalTrips} 
       totalEarnings={totalEarnings} 
       todayTrips={todayTrips || []}
+      pricingRules={pricingRules || []}
     />
   )
 }

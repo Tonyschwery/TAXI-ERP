@@ -65,9 +65,6 @@ export default async function DashboardLayout({
               <Link href="/dashboard/statements/drivers" className="flex items-center gap-3 px-3 py-2 rounded-md hover:bg-gray-800 text-gray-300 hover:text-white transition-colors">
                 <FileText className="w-5 h-5" /> Driver Statements
               </Link>
-              <Link href="/dashboard/statements/vehicles" className="flex items-center gap-3 px-3 py-2 rounded-md hover:bg-gray-800 text-gray-300 hover:text-white transition-colors">
-                <FileText className="w-5 h-5" /> Vehicle Statements
-              </Link>
               <Link href="/dashboard/accounting" className="flex items-center gap-3 px-3 py-2 rounded-md hover:bg-gray-800 text-gray-300 hover:text-white transition-colors">
                 <PieChart className="w-5 h-5" /> Accounting Dashboard
               </Link>
@@ -87,9 +84,6 @@ export default async function DashboardLayout({
               <Link href="/dashboard/statements/drivers" className="flex items-center gap-3 px-3 py-2 rounded-md hover:bg-gray-800 text-gray-300 hover:text-white transition-colors">
                 <FileText className="w-5 h-5" /> Driver Statements
               </Link>
-              <Link href="/dashboard/statements/vehicles" className="flex items-center gap-3 px-3 py-2 rounded-md hover:bg-gray-800 text-gray-300 hover:text-white transition-colors">
-                <FileText className="w-5 h-5" /> Vehicle Statements
-              </Link>
             </>
           )}
 
@@ -99,9 +93,6 @@ export default async function DashboardLayout({
               <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider mt-4 mb-2 px-3">System Settings</div>
               <Link href="/dashboard/drivers" className="flex items-center gap-3 px-3 py-2 rounded-md hover:bg-gray-800 text-gray-300 hover:text-white transition-colors">
                 <Users className="w-5 h-5" /> Drivers & Categories
-              </Link>
-              <Link href="/dashboard/vehicles" className="flex items-center gap-3 px-3 py-2 rounded-md hover:bg-gray-800 text-gray-300 hover:text-white transition-colors">
-                <Car className="w-5 h-5" /> Vehicles
               </Link>
               <Link href="/dashboard/pricing" className="flex items-center gap-3 px-3 py-2 rounded-md hover:bg-gray-800 text-gray-300 hover:text-white transition-colors">
                 <DollarSign className="w-5 h-5" /> Pricing Rules
